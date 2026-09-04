@@ -24,3 +24,6 @@ next-env.d.ts
 Thumbs.db
 
 notes.md
+
+# Live capture output: contains a real phone number and real HMAC signatures, computed with the live API key.
+backend/fixtures/raw/
