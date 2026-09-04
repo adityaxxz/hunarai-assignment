@@ -4,7 +4,11 @@ version = "0.1.0"
 description = "Backend for the Hunar.AI FDE take-home: hiring assistant + sourcing reachout"
 requires-python = ">=3.11"
 dependencies = [
+    "alembic>=1.19.2",
+    "asyncpg>=0.31.0",
     "fastapi>=0.115",
+    "pydantic-settings>=2.15.0",
+    "sqlalchemy[asyncio]>=2.0",
     "uvicorn[standard]>=0.32",
 ]
 

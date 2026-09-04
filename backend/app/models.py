@@ -1,0 +1,334 @@
+"""All SQLAlchemy models for the project, in one file.
+
+Two conventions worth knowing before reading:
+
+1. Enums we own (candidate source, decision, campaign status) are typed columns
+   backed by a Python StrEnum, so SQLAlchemy rejects an unknown value on write.
+   Enums Hunar owns (call status, lifecycle status, engagement) are plain `str`
+   columns that accept anything. Rejected typing both: if Hunar adds a status
+   value we have never seen, webhook ingestion must record it, not blow up.
+   `native_enum=False` keeps all of them as VARCHAR rather than Postgres ENUM
+   types, so adding a member is a code change, not a migration.
+2. Names and values of every enum member are identical uppercase strings, so
+   what is in the database is what is in the code.
+"""
+
+from datetime import datetime
+from enum import StrEnum
+from typing import Any
+
+from sqlalchemy import (
+    DateTime,
+    Enum,
+    ForeignKey,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+)
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+class TimestampMixin:
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class CandidateSource(StrEnum):
+    INBOUND_CSV = "INBOUND_CSV"
+    SOURCED_PDL = "SOURCED_PDL"
+    MANUAL = "MANUAL"
+
+
+class CampaignKind(StrEnum):
+    SCREENING = "SCREENING"
+    SOURCING = "SOURCING"
+
+
+class CampaignStatus(StrEnum):
+    DRAFT = "DRAFT"
+    DISPATCHING = "DISPATCHING"
+    RUNNING = "RUNNING"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+
+
+class ScreeningDecision(StrEnum):
+    QUALIFIED = "QUALIFIED"
+    REJECTED = "REJECTED"
+    UNDECIDED = "UNDECIDED"
+
+
+class InterviewStatus(StrEnum):
+    BOOKED = "BOOKED"
+    RESCHEDULED = "RESCHEDULED"
+    ATTENDED = "ATTENDED"
+    NO_SHOW = "NO_SHOW"
+
+
+class MessageChannel(StrEnum):
+    LOGGED = "LOGGED"
+    WHATSAPP = "WHATSAPP"
+
+
+class MessageStatus(StrEnum):
+    PENDING = "PENDING"
+    SENT = "SENT"
+    FAILED = "FAILED"
+
+
+def _enum(python_enum: type[StrEnum]) -> Enum:
+    # validate_strings is off by default, which lets a plain string sail past the
+    # enum and into the column. On, so a typo fails at the write, not at read time.
+    return Enum(python_enum, native_enum=False, length=32, validate_strings=True)
+
+
+class Requisition(Base, TimestampMixin):
+    __tablename__ = "requisitions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    title: Mapped[str] = mapped_column(String(200))
+    location: Mapped[str] = mapped_column(String(200))
+    languages: Mapped[list[str]] = mapped_column(JSONB)
+    shift: Mapped[str | None] = mapped_column(String(120))
+    pay_min: Mapped[int | None]
+    pay_max: Mapped[int | None]
+    openings: Mapped[int] = mapped_column(default=1)
+
+    # Knockout questions and the weighted rubric are stored as the JSON the UI
+    # edits. Rejected normalising them into criterion rows: they are only ever
+    # read as a whole, to build the agent's result_schema and to score a result.
+    knockout_questions: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB, default=list
+    )
+    rubric: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list)
+
+
+class AgentVersion(Base, TimestampMixin):
+    """One generated Hunar agent config, kept so a prompt change is traceable to
+    the agent id it produced and to the calls made under it."""
+
+    __tablename__ = "agent_versions"
+    __table_args__ = (UniqueConstraint("requisition_id", "version"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    # Null for Module B reachout agents, which belong to a search, not a requisition.
+    requisition_id: Mapped[int | None] = mapped_column(
+        ForeignKey("requisitions.id"), index=True
+    )
+    version: Mapped[int] = mapped_column(default=1)
+
+    name: Mapped[str] = mapped_column(String(64))
+    language: Mapped[str] = mapped_column(String(32))
+    voice_persona: Mapped[str] = mapped_column(String(32))
+    persona_name: Mapped[str] = mapped_column(String(64))
+    agent_prompt: Mapped[str] = mapped_column(Text)
+    objective: Mapped[str] = mapped_column(Text)
+    introduction: Mapped[str] = mapped_column(Text)
+    result_prompt: Mapped[str] = mapped_column(Text)
+    result_schema: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+
+    # Null until the config is pushed to Hunar, so an edited-but-unpushed draft
+    # is a first-class state rather than something we have to infer.
+    hunar_agent_id: Mapped[str | None] = mapped_column(String(64), unique=True)
+
+
+class Candidate(Base, TimestampMixin):
+    __tablename__ = "candidates"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    requisition_id: Mapped[int | None] = mapped_column(
+        ForeignKey("requisitions.id"), index=True
+    )
+    sourcing_search_id: Mapped[int | None] = mapped_column(
+        ForeignKey("sourcing_searches.id"), index=True
+    )
+
+    name: Mapped[str] = mapped_column(String(200))
+    phone_e164: Mapped[str] = mapped_column(String(20))
+    source: Mapped[CandidateSource] = mapped_column(_enum(CandidateSource))
+    # Which resolver produced the number, so the UI can badge it. Null for
+    # inbound candidates, who supplied their own.
+    phone_source: Mapped[str | None] = mapped_column(String(32))
+
+    # Feeds Hunar's custom_data. Must cover every key in the agent's
+    # custom_variables or the call create returns 422.
+    custom_fields: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    dedupe_key: Mapped[str] = mapped_column(String(64), unique=True)
+
+    interview_slot_id: Mapped[int | None] = mapped_column(
+        ForeignKey("interview_slots.id"), index=True
+    )
+    interview_status: Mapped[InterviewStatus | None] = mapped_column(
+        _enum(InterviewStatus)
+    )
+
+    calls: Mapped[list["Call"]] = relationship(back_populates="candidate")
+
+
+class Campaign(Base, TimestampMixin):
+    __tablename__ = "campaigns"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    kind: Mapped[CampaignKind] = mapped_column(_enum(CampaignKind))
+    name: Mapped[str] = mapped_column(String(200))
+    requisition_id: Mapped[int | None] = mapped_column(
+        ForeignKey("requisitions.id"), index=True
+    )
+    agent_version_id: Mapped[int] = mapped_column(
+        ForeignKey("agent_versions.id"), index=True
+    )
+    # Our tracking id echoed back on every Hunar call, so a call always traces to
+    # its batch. Null until dispatch, because it is derived from the row id.
+    request_id: Mapped[str | None] = mapped_column(String(64), unique=True)
+
+    # Hunar rejects a partial retry_config, so these two move together or both
+    # stay null and the object is omitted from the request entirely.
+    max_retry_count: Mapped[int | None]
+    retry_interval_hours: Mapped[int | None]
+
+    # Same all-or-nothing rule for guardrails, across all three fields. Times are
+    # stored as "HH:MM" strings rather than TIME because Hunar rejects HH:MM:SS,
+    # and a TIME column would tempt us to format it back with seconds.
+    allowed_days: Mapped[list[str] | None] = mapped_column(JSONB)
+    earliest_call_time: Mapped[str | None] = mapped_column(String(5))
+    last_call_time: Mapped[str | None] = mapped_column(String(5))
+
+    timezone: Mapped[str] = mapped_column(String(64), default="Asia/Kolkata")
+    from_phone_number: Mapped[str | None] = mapped_column(String(20))
+    status: Mapped[CampaignStatus] = mapped_column(
+        _enum(CampaignStatus), default=CampaignStatus.DRAFT
+    )
+
+    calls: Mapped[list["Call"]] = relationship(back_populates="campaign")
+
+
+class Call(Base, TimestampMixin):
+    """Our mirror of a Hunar call, plus the screening outcome we derive from it."""
+
+    __tablename__ = "calls"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    campaign_id: Mapped[int] = mapped_column(ForeignKey("campaigns.id"), index=True)
+    candidate_id: Mapped[int] = mapped_column(ForeignKey("candidates.id"), index=True)
+    hunar_call_id: Mapped[str | None] = mapped_column(String(64), unique=True)
+
+    # Two separate status fields on purpose. `status` is the current attempt,
+    # `lifecycle_status` is the overall state across retries. A call that is
+    # NOT_CONNECTED on this attempt but still IN_PROGRESS overall has not failed.
+    status: Mapped[str | None] = mapped_column(String(32))
+    lifecycle_status: Mapped[str | None] = mapped_column(String(32))
+    engagement_status: Mapped[str | None] = mapped_column(String(32))
+    answered_by: Mapped[str | None] = mapped_column(String(32))
+    call_ended_by: Mapped[str | None] = mapped_column(String(32))
+    redial_status: Mapped[str | None] = mapped_column(String(32))
+
+    retry_count: Mapped[int] = mapped_column(default=0)
+    retries_left: Mapped[int | None]
+    next_retry_scheduled_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    user_speech_duration: Mapped[float | None]
+
+    # Both may stay null forever on a call that never connected.
+    recording_url: Mapped[str | None] = mapped_column(Text)
+    result: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+
+    decision: Mapped[ScreeningDecision | None] = mapped_column(_enum(ScreeningDecision))
+    score: Mapped[float | None]
+    override_decision: Mapped[ScreeningDecision | None] = mapped_column(
+        _enum(ScreeningDecision)
+    )
+    override_reason_code: Mapped[str | None] = mapped_column(String(64))
+    override_note: Mapped[str | None] = mapped_column(Text)
+    overridden_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    campaign: Mapped["Campaign"] = relationship(back_populates="calls")
+    candidate: Mapped["Candidate"] = relationship(back_populates="calls")
+
+
+class CallEvent(Base):
+    """Raw webhook payloads, written before anything is interpreted."""
+
+    __tablename__ = "call_events"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    hunar_call_id: Mapped[str] = mapped_column(String(64), index=True)
+    call_id: Mapped[int | None] = mapped_column(ForeignKey("calls.id"), index=True)
+    event_type: Mapped[str] = mapped_column(String(64))
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB)
+
+    # SHA-256 of the exact raw request body. Hunar redelivers on any non-2xx and
+    # can deliver twice on success, so idempotency is enforced here by the
+    # database rather than by a check-then-insert that races itself.
+    payload_hash: Mapped[str] = mapped_column(String(64), unique=True)
+
+    received_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class InterviewSlot(Base, TimestampMixin):
+    __tablename__ = "interview_slots"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    requisition_id: Mapped[int] = mapped_column(
+        ForeignKey("requisitions.id"), index=True
+    )
+    location: Mapped[str] = mapped_column(String(200))
+    starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    capacity: Mapped[int]
+    booked_count: Mapped[int] = mapped_column(default=0)
+
+
+class Message(Base, TimestampMixin):
+    """Outbox row. Written whether the channel actually sends or only logs, so the
+    in-app outbox is the same artifact in demo mode and in live mode."""
+
+    __tablename__ = "messages"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    candidate_id: Mapped[int | None] = mapped_column(
+        ForeignKey("candidates.id"), index=True
+    )
+    channel: Mapped[MessageChannel] = mapped_column(_enum(MessageChannel))
+    recipient: Mapped[str] = mapped_column(String(20))
+    template: Mapped[str] = mapped_column(String(64))
+    variables: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    trigger_event: Mapped[str] = mapped_column(String(64))
+    status: Mapped[MessageStatus] = mapped_column(
+        _enum(MessageStatus), default=MessageStatus.PENDING
+    )
+    error: Mapped[str | None] = mapped_column(Text)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class DncEntry(Base, TimestampMixin):
+    __tablename__ = "dnc_list"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    phone_e164: Mapped[str] = mapped_column(String(20), unique=True)
+    reason: Mapped[str | None] = mapped_column(String(200))
+
+
+class SourcingSearch(Base, TimestampMixin):
+    __tablename__ = "sourcing_searches"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    jd_text: Mapped[str] = mapped_column(Text)
+    # Kept so the interview answer to "did the LLM write this query?" is a row,
+    # not a guess. The UI lets the user edit it before the search runs.
+    generated_query: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    provider: Mapped[str] = mapped_column(String(32))
+    result_count: Mapped[int] = mapped_column(default=0)
