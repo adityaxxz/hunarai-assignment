@@ -1,0 +1,26 @@
+# Secrets and local-only files
+.env
+.env.local
+.env.*.local
+current-status.md
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+next-env.d.ts
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+notes.md
