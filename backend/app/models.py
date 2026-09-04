@@ -18,6 +18,7 @@ from enum import StrEnum
 from typing import Any
 
 from sqlalchemy import (
+    JSON,
     DateTime,
     Enum,
     ForeignKey,
@@ -28,6 +29,12 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+
+# Postgres gets JSONB, every other dialect gets plain JSON. The only other
+# dialect is the in-memory SQLite the tests run on, which is what keeps `pytest`
+# from needing a database server. Production DDL is unchanged: the migration
+# still emits JSONB.
+JSONColumn = JSON().with_variant(JSONB(), "postgresql")
 
 
 class Base(DeclarativeBase):
@@ -95,7 +102,7 @@ class Requisition(Base, TimestampMixin):
     id: Mapped[int] = mapped_column(primary_key=True)
     title: Mapped[str] = mapped_column(String(200))
     location: Mapped[str] = mapped_column(String(200))
-    languages: Mapped[list[str]] = mapped_column(JSONB)
+    languages: Mapped[list[str]] = mapped_column(JSONColumn)
     shift: Mapped[str | None] = mapped_column(String(120))
     pay_min: Mapped[int | None]
     pay_max: Mapped[int | None]
@@ -105,9 +112,9 @@ class Requisition(Base, TimestampMixin):
     # edits. Rejected normalising them into criterion rows: they are only ever
     # read as a whole, to build the agent's result_schema and to score a result.
     knockout_questions: Mapped[list[dict[str, Any]]] = mapped_column(
-        JSONB, default=list
+        JSONColumn, default=list
     )
-    rubric: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list)
+    rubric: Mapped[list[dict[str, Any]]] = mapped_column(JSONColumn, default=list)
 
 
 class AgentVersion(Base, TimestampMixin):
@@ -132,7 +139,7 @@ class AgentVersion(Base, TimestampMixin):
     objective: Mapped[str] = mapped_column(Text)
     introduction: Mapped[str] = mapped_column(Text)
     result_prompt: Mapped[str] = mapped_column(Text)
-    result_schema: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    result_schema: Mapped[dict[str, Any]] = mapped_column(JSONColumn, default=dict)
 
     # Null until the config is pushed to Hunar, so an edited-but-unpushed draft
     # is a first-class state rather than something we have to infer.
@@ -159,7 +166,7 @@ class Candidate(Base, TimestampMixin):
 
     # Feeds Hunar's custom_data. Must cover every key in the agent's
     # custom_variables or the call create returns 422.
-    custom_fields: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    custom_fields: Mapped[dict[str, Any]] = mapped_column(JSONColumn, default=dict)
     dedupe_key: Mapped[str] = mapped_column(String(64), unique=True)
 
     interview_slot_id: Mapped[int | None] = mapped_column(
@@ -196,7 +203,7 @@ class Campaign(Base, TimestampMixin):
     # Same all-or-nothing rule for guardrails, across all three fields. Times are
     # stored as "HH:MM" strings rather than TIME because Hunar rejects HH:MM:SS,
     # and a TIME column would tempt us to format it back with seconds.
-    allowed_days: Mapped[list[str] | None] = mapped_column(JSONB)
+    allowed_days: Mapped[list[str] | None] = mapped_column(JSONColumn)
     earliest_call_time: Mapped[str | None] = mapped_column(String(5))
     last_call_time: Mapped[str | None] = mapped_column(String(5))
 
@@ -234,11 +241,16 @@ class Call(Base, TimestampMixin):
     next_retry_scheduled_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True)
     )
+    # duration_minutes is deliberately not stored: Hunar sends both and one is
+    # the other divided by 60, so keeping it would be a second source of truth.
+    duration_seconds: Mapped[float | None]
     user_speech_duration: Mapped[float | None]
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     # Both may stay null forever on a call that never connected.
     recording_url: Mapped[str | None] = mapped_column(Text)
-    result: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    result: Mapped[dict[str, Any] | None] = mapped_column(JSONColumn)
 
     decision: Mapped[ScreeningDecision | None] = mapped_column(_enum(ScreeningDecision))
     score: Mapped[float | None]
@@ -263,10 +275,19 @@ class CallEvent(Base):
     __tablename__ = "call_events"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    hunar_call_id: Mapped[str] = mapped_column(String(64), index=True)
+    # Nullable, and that is load-bearing. A webhook can arrive before our own
+    # dispatch has written the call row, and the id may not even be in the body.
+    # Rejecting the event would make Hunar retry four times and then drop it
+    # permanently, so we store it unlinked and let task 6 resolve it.
+    hunar_call_id: Mapped[str | None] = mapped_column(String(64), index=True)
     call_id: Mapped[int | None] = mapped_column(ForeignKey("calls.id"), index=True)
     event_type: Mapped[str] = mapped_column(String(64))
-    payload: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    # The exact bytes Hunar sent, as text, not parsed JSON. The signature is
+    # computed over these bytes, so keeping them verbatim is what makes the
+    # stored event re-verifiable; a JSONB round-trip reorders keys and drops
+    # whitespace. It also means a malformed body is still recorded rather than
+    # rejected at the column.
+    raw_body: Mapped[str] = mapped_column(Text)
 
     # SHA-256 of the exact raw request body. Hunar redelivers on any non-2xx and
     # can deliver twice on success, so idempotency is enforced here by the
@@ -276,7 +297,14 @@ class CallEvent(Base):
     received_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+    # Set once the event has been dealt with, successfully or not. Null means
+    # "not yet", which is what orphan resolution sweeps for, so an event whose
+    # call row does not exist yet must stay null.
     processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Non-null with processed_at set means we gave up on this one: the body could
+    # not be interpreted. Terminal, not a retry queue, since re-reading an
+    # unparseable body produces the same nothing.
+    processing_error: Mapped[str | None] = mapped_column(Text)
 
 
 class InterviewSlot(Base, TimestampMixin):
@@ -305,7 +333,7 @@ class Message(Base, TimestampMixin):
     channel: Mapped[MessageChannel] = mapped_column(_enum(MessageChannel))
     recipient: Mapped[str] = mapped_column(String(20))
     template: Mapped[str] = mapped_column(String(64))
-    variables: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    variables: Mapped[dict[str, Any]] = mapped_column(JSONColumn, default=dict)
     trigger_event: Mapped[str] = mapped_column(String(64))
     status: Mapped[MessageStatus] = mapped_column(
         _enum(MessageStatus), default=MessageStatus.PENDING
@@ -329,6 +357,6 @@ class SourcingSearch(Base, TimestampMixin):
     jd_text: Mapped[str] = mapped_column(Text)
     # Kept so the interview answer to "did the LLM write this query?" is a row,
     # not a guess. The UI lets the user edit it before the search runs.
-    generated_query: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    generated_query: Mapped[dict[str, Any]] = mapped_column(JSONColumn, default=dict)
     provider: Mapped[str] = mapped_column(String(32))
     result_count: Mapped[int] = mapped_column(default=0)

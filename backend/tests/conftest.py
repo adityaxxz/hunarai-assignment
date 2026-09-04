@@ -49,6 +49,16 @@ async def session_factory():
     await engine.dispose()
 
 
+@pytest.fixture(autouse=True)
+async def _background_tasks_use_test_db(session_factory, monkeypatch):
+    """`process_call_event` runs as a background task after the response, so it
+    opens its own session rather than borrowing the request's. Without this it
+    would open one against the real engine."""
+    import app.services.call_state as call_state
+
+    monkeypatch.setattr(call_state, "SessionLocal", session_factory)
+
+
 @pytest.fixture
 async def client(session_factory):
     async def override_get_session():
