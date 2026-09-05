@@ -206,3 +206,14 @@ async def test_unparseable_payload_is_marked_errored_and_does_not_raise(session)
     await session.refresh(stored)
     assert stored.processed_at is not None
     assert stored.processing_error == "could not parse payload"
+
+
+async def test_empty_result_does_not_erase_a_real_one(session) -> None:
+    """Hunar sends `"result": {}` on a call that produced none. Observed in the
+    task 3.5 capture; without this the summary event wipes a real result."""
+    call = await make_call(session, status="COMPLETED", retry_count=0)
+
+    apply_call_update(call, CallUpdate(HUNAR_CALL_ID, result={"open_to_work": True}))
+    apply_call_update(call, CallUpdate(HUNAR_CALL_ID, result={}))
+
+    assert call.result == {"open_to_work": True}

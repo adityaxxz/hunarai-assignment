@@ -137,7 +137,11 @@ def apply_call_update(call: Call, update: CallUpdate) -> bool:
     if update.recording_url and call.recording_url != update.recording_url:
         call.recording_url = update.recording_url
         changed = True
-    if update.result is not None and call.result != update.result:
+    # Truthiness, not `is not None`: the live capture shows Hunar sends
+    # `"result": {}` on a call that produced none, and an empty result is not a
+    # result. Testing for None would let a summary event overwrite a real result
+    # with an empty dict.
+    if update.result and call.result != update.result:
         call.result = update.result
         changed = True
 
