@@ -6,6 +6,7 @@ import hashlib
 import io
 import json
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import pytest
 from sqlalchemy import select
@@ -13,6 +14,8 @@ from sqlalchemy import select
 from app.integrations.hunar.errors import HunarQuotaError
 from app.models import Call, CallEvent, Campaign, CampaignStatus, Candidate
 from app.services.campaign import (
+    DispatchOutcome,
+    describe_dialling,
     next_dial_start,
     validate_guardrails,
     validate_retry_config,
@@ -492,3 +495,102 @@ async def test_an_empty_list_is_an_empty_page_not_an_error(client) -> None:
 
     assert body["total"] == 0
     assert body["results"] == []
+
+
+# --- what the campaign says about dialling ---------------------------------
+#
+# The fourth instance of one bug class in this project: a screen asserting
+# something the system already knows is false. The first three were the funnel
+# counters disagreeing with the call table, the sourcing header claiming numbers
+# the provider had withheld, and a FAILED campaign reporting that dialling had
+# begun. All three had the same shape — a sentence computed from what was
+# requested while the truth sat one query away. One test per status, because the
+# failure mode is a status nobody thought about inheriting another one's words.
+
+SATURDAY_EVENING = datetime(2026, 9, 5, 20, 0, tzinfo=ZoneInfo("Asia/Kolkata"))
+DIALLED_AT = datetime(2026, 8, 30, 9, 12, tzinfo=ZoneInfo("Asia/Kolkata"))
+
+
+def _note(outcome: DispatchOutcome, guardrails=GOOD_GUARDRAILS) -> str:
+    return describe_dialling(
+        outcome, guardrails, "Asia/Kolkata", now=SATURDAY_EVENING
+    ).explanation
+
+
+def test_a_completed_campaign_says_when_dialling_started_not_when_it_will() -> None:
+    """Every call is terminal. Telling a recruiter dialling starts on Monday is
+    the system describing a future for something that already finished."""
+    note = _note(
+        DispatchOutcome(status="COMPLETED", dialled=7, first_dialled_at=DIALLED_AT)
+    )
+
+    assert "Dialling started Sunday 30 Aug at 09:12 Asia/Kolkata." == note
+    assert "starts" not in note
+
+
+def test_a_running_campaign_with_calls_in_flight_reports_both_facts() -> None:
+    """Some dialled, some still queued. Both are true and neither replaces the
+    other, so the note carries the past tense and the pending window."""
+    note = _note(
+        DispatchOutcome(
+            status="RUNNING", dialled=3, waiting=2, first_dialled_at=DIALLED_AT
+        )
+    )
+
+    assert note.startswith("Dialling started Sunday 30 Aug at 09:12")
+    assert "2 calls are still waiting for the calling window" in note
+    assert "which next opens Monday 07 Sep at 09:00" in note
+
+
+def test_a_running_campaign_with_everything_queued_keeps_the_future_tense() -> None:
+    """Nothing has dialled, so the window really is in the future. This is the
+    one case where the original wording was right."""
+    note = _note(DispatchOutcome(status="RUNNING", waiting=5))
+
+    assert "Dialling starts Monday 07 Sep at 09:00 Asia/Kolkata." in note
+    assert "Dialling started" not in note
+
+
+def test_partially_dispatched_with_dialled_calls_drops_the_future_claim() -> None:
+    """The appended clause about rejected rows was always right; the sentence in
+    front of it claimed dialling would begin on Monday for calls already placed."""
+    note = _note(
+        DispatchOutcome(
+            status="PARTIALLY_DISPATCHED",
+            dispatch_error="2 of 5 numbers were not accepted",
+            dialled=3,
+            not_dispatched=2,
+            first_dialled_at=DIALLED_AT,
+        )
+    )
+
+    assert note.startswith("Dialling started Sunday 30 Aug at 09:12")
+    assert "2 calls were never dispatched: 2 of 5 numbers were not accepted" in note
+    assert "Dialling starts" not in note
+    assert "will schedule these calls" not in note
+
+
+def test_a_failed_campaign_quotes_the_rejection_and_schedules_nothing() -> None:
+    window = describe_dialling(
+        DispatchOutcome(
+            status="FAILED",
+            dispatch_error="[400] Maximum allowed last_call_time is 21:00.",
+            not_dispatched=1,
+        ),
+        GOOD_GUARDRAILS,
+        "Asia/Kolkata",
+        now=SATURDAY_EVENING,
+    )
+
+    assert window.starts_at is None
+    assert window.dialling_now is False
+    assert "Nothing was dispatched" in window.explanation
+    assert "Maximum allowed last_call_time is 21:00." in window.explanation
+
+
+def test_a_dialling_call_with_no_start_time_still_avoids_the_future_tense() -> None:
+    """Hunar reports RINGING before it reports a start time, so a call can be
+    demonstrably dialling with no timestamp to quote."""
+    note = _note(DispatchOutcome(status="RUNNING", dialled=1, first_dialled_at=None))
+
+    assert note == "Dialling has started."

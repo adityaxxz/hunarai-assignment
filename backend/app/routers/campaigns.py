@@ -33,9 +33,9 @@ from app.schemas import (
 )
 from app.services.campaign import (
     CampaignValidationError,
-    DialWindow,
+    DispatchOutcome,
+    describe_dialling,
     estimate,
-    next_dial_start,
     validate_campaign,
 )
 from app.services.call_state import resolve_orphan_events
@@ -439,34 +439,23 @@ def _call_read(call: Call, candidate: Candidate) -> CallRead:
     )
 
 
-def _dial_window(campaign: Campaign, guardrails: dict[str, Any] | None) -> DialWindow:
-    """What to say about dialling, derived from what happened rather than from
-    what was asked for.
+def _outcome(campaign: Campaign, calls: list[Call]) -> DispatchOutcome:
+    """Count what actually happened, so the note can be written from it.
 
-    The bug this fixes: a campaign that had just failed with a 400 reported
-    "Inside the calling window now (09:00-22:00), so dialling starts immediately"
-    beside a FAILED badge. `next_dial_start` was being handed the window we
-    *requested*, and it has no idea whether Hunar accepted it — so the system
-    confidently described a schedule that did not exist, using the very window
-    that had been refused.
+    Stages, not raw statuses: `funnel_stage` already knows how to read Hunar's
+    two status fields, and duplicating that here is how the two would drift.
     """
-    if campaign.status is CampaignStatus.FAILED:
-        return DialWindow(
-            None,
-            False,
-            "Nothing was dispatched, so no calls are scheduled. Hunar rejected the "
-            f"request: {campaign.dispatch_error or 'no reason was given'}",
-        )
+    stages = [funnel_stage(call) for call in calls]
+    started = [call.started_at for call in calls if call.started_at]
 
-    window = next_dial_start(guardrails, campaign.timezone)
-    if campaign.status is CampaignStatus.PARTIALLY_DISPATCHED:
-        return DialWindow(
-            window.starts_at,
-            window.dialling_now,
-            f"{window.explanation} This covers the calls Hunar accepted; the rest "
-            "were never dispatched.",
-        )
-    return window
+    return DispatchOutcome(
+        status=str(campaign.status),
+        dispatch_error=campaign.dispatch_error,
+        waiting=stages.count("queued"),
+        not_dispatched=stages.count("dispatch_failed"),
+        dialled=sum(1 for s in stages if s not in ("queued", "dispatch_failed")),
+        first_dialled_at=min(started) if started else None,
+    )
 
 
 async def _detail(session: AsyncSession, campaign: Campaign) -> CampaignDetail:
@@ -487,7 +476,7 @@ async def _detail(session: AsyncSession, campaign: Campaign) -> CampaignDetail:
         if campaign.allowed_days
         else None
     )
-    window = _dial_window(campaign, guardrails)
+    window = describe_dialling(_outcome(campaign, list(rows)), guardrails, campaign.timezone)
     retry = (
         {"max_retry_count": campaign.max_retry_count,
          "retry_interval_hours": campaign.retry_interval_hours}
