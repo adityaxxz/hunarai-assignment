@@ -1,0 +1,71 @@
+# Render Blueprint. Chosen over dashboard-only configuration so the deploy is
+# reviewable in the diff and reproducible if the service is ever recreated.
+#
+# Not covered here: DATABASE_URL and the secrets, which are marked `sync: false`
+# and prompted for once in the dashboard. Nothing secret belongs in this file.
+services:
+  - type: web
+    name: hunar-fde-backend
+    runtime: python
+    plan: free
+    region: singapore
+    # Monorepo: everything below runs with backend/ as the working directory.
+    rootDir: backend
+    healthCheckPath: /health
+
+    # uv is the project's package manager and uv.lock is the source of truth.
+    # --frozen fails loudly if the lock and pyproject disagree rather than
+    # silently resolving something different from what was tested. --no-dev
+    # leaves pytest and friends out of the image.
+    buildCommand: pip install uv && uv sync --frozen --no-dev
+
+    # ONE worker, deliberately. Three pieces of state are per-process:
+    #   - the simulator holds every demo call in memory and schedules its webhook
+    #     deliveries as asyncio tasks in this process
+    #   - the webhook rate-limit window is a module-level deque
+    #   - migrations run once at startup (see app/startup.py)
+    # A second worker would serve requests from a process that has never heard of
+    # half the calls, which presents as flaky infrastructure rather than as a
+    # configuration mistake. Render's free tier is one instance; this keeps it
+    # one process too.
+    startCommand: uv run uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 1
+
+    envVars:
+      # --- required, set in the dashboard ---
+      # Neon pooled connection string. Paste it exactly as Neon prints it:
+      # app/db.py rewrites postgresql:// to postgresql+asyncpg and translates
+      # sslmode, so it does not need editing.
+      - key: DATABASE_URL
+        sync: false
+      # The Vercel production URL, e.g. https://your-app.vercel.app
+      # No trailing slash. CORS compares this string exactly.
+      - key: FRONTEND_ORIGIN
+        sync: false
+      # Any long random string. Set explicitly so it survives a restart: the
+      # generated default is per-process, and demo webhooks signed before a
+      # restart would fail verification after one.
+      - key: DEMO_WEBHOOK_SIGNING_KEY
+        sync: false
+      # Bearer token for /internal/* (the reconciliation cron endpoints).
+      - key: INTERNAL_API_TOKEN
+        sync: false
+
+      # --- safe defaults, override only when going live ---
+      # true keeps the deployed app on the simulator, which is what makes the
+      # link work after the trial key expires. Flipping to false places real,
+      # billable calls.
+      - key: DEMO_MODE
+        value: "true"
+      - key: PEOPLE_SEARCH_PROVIDER
+        value: fixture
+      - key: NOTIFICATION_CHANNEL
+        value: logged
+
+      # PUBLIC_BASE_URL is deliberately NOT set here. app/config.py falls back to
+      # RENDER_EXTERNAL_URL, which Render injects with this service's own URL, so
+      # the simulator posts its webhooks to the right host without anyone having
+      # to type it. Set it explicitly only behind a custom domain.
+
+      # HUNAR_API_KEY is not listed: demo mode does not need it, and leaving it
+      # out means the deployed app cannot place a real call by accident. Add it
+      # in the dashboard at the same time as flipping DEMO_MODE to false.

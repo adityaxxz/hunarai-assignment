@@ -1,3 +1,4 @@
+import os
 import secrets
 
 from pydantic import Field
@@ -16,7 +17,14 @@ class Settings(BaseSettings):
 
     database_url: str
     frontend_origin: str = "http://localhost:3000"
-    public_base_url: str = "http://localhost:8000"
+    # Render injects RENDER_EXTERNAL_URL with the service's public URL. Defaulting
+    # to it removes the single most damaging misconfiguration available here: the
+    # simulator POSTs its webhooks to this address, so a wrong value means demo
+    # mode delivers nothing and fails completely silently. An explicit
+    # PUBLIC_BASE_URL still wins, because env vars beat a default_factory.
+    public_base_url: str = Field(
+        default_factory=lambda: os.environ.get("RENDER_EXTERNAL_URL", "http://localhost:8000")
+    )
 
     # false makes the app place real, billable phone calls. See section 8 of notes.
     demo_mode: bool = True
