@@ -7,6 +7,8 @@ shapes, and anything clever here becomes something clever to reimplement there.
 
 import asyncio
 import logging
+import os
+import sys
 import time
 from typing import Any
 
@@ -37,6 +39,21 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_BASE_URL = "https://api.voice.hunar.ai/external/v1"
 
+# Escape hatch for a deliberate live call from inside a test. Nothing in this
+# repo sets it. scripts/smoke_hunar.py does not need it either, because it runs
+# outside pytest.
+LIVE_CLIENT_OPT_IN = "HUNAR_ALLOW_LIVE_CLIENT"
+
+
+class LiveClientBlockedError(RuntimeError):
+    """Raised when a real client is constructed during a test run."""
+
+
+def _under_pytest() -> bool:
+    # PYTEST_CURRENT_TEST is set per test; sys.modules catches collection and
+    # module import time, before the first test has started.
+    return "PYTEST_CURRENT_TEST" in os.environ or "pytest" in sys.modules
+
 _RETRYABLE_STATUS = {500, 502, 503, 504}
 
 _ERROR_BY_STATUS: dict[int, type[HunarError]] = {
@@ -63,6 +80,26 @@ class HunarClient:
         backoff_seconds: float = 0.5,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
+        # The guard lives at construction, not behind a fixture, because a
+        # fixture is something a future test can forget to apply — and this
+        # already happened: a router calling get_voice_provider() under
+        # DEMO_MODE=false put real requests on api.voice.hunar.ai and only
+        # surfaced because the key 401'd. Had it resolved, create_agent would
+        # have written to a shared production org that already holds 100+ other
+        # people's agents, and create_call would have spent real calling minutes.
+        #
+        # An injected transport is exempt: that is how the client's own tests run
+        # against httpx.MockTransport, and supplying a real one is a deliberate
+        # act rather than an accident.
+        if transport is None and _under_pytest() and not os.environ.get(LIVE_CLIENT_OPT_IN):
+            raise LiveClientBlockedError(
+                "HunarClient was constructed during a pytest run, which would put "
+                "real requests on api.voice.hunar.ai: create_agent writes to a "
+                "shared production org and create_call spends real calling "
+                "minutes. Use HunarSimulator, or inject an httpx transport. If a "
+                f"live call from a test is genuinely intended, set {LIVE_CLIENT_OPT_IN}=1."
+            )
+
         self._max_attempts = max_attempts
         self._backoff_seconds = backoff_seconds
         # The key goes into the header and is never kept as an attribute, so it

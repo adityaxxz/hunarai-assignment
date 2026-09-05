@@ -21,3 +21,185 @@ export interface Health {
   demo_mode: boolean;
   version: string;
 }
+
+// --- requisitions ---------------------------------------------------------
+
+/** Mirrors backend `schemas.Criterion`. One screening question, and the unit
+ * that drives the agent prompt, the result_schema and the rubric at once. */
+export interface Criterion {
+  key: string;
+  question: string;
+  type: "boolean" | "string";
+  knockout: boolean;
+  weight: number;
+  expected: boolean | string | null;
+}
+
+export interface RequisitionInput {
+  title: string;
+  location: string;
+  language: string;
+  voice_persona: string;
+  shift: string | null;
+  pay_min: number | null;
+  pay_max: number | null;
+  openings: number;
+  criteria: Criterion[];
+  candidate_variables: string[];
+}
+
+export interface Requisition extends RequisitionInput {
+  id: number;
+}
+
+/** The exact body sent to Hunar's POST /agents/. Editable in the agent panel,
+ * which is why it is a request shape rather than a display shape. */
+export interface AgentPayload {
+  name: string;
+  language: string;
+  voice_persona: string;
+  persona_name: string | null;
+  agent_prompt: string;
+  objective: string;
+  introduction: string;
+  result_prompt: string;
+  result_schema: Record<string, unknown>;
+}
+
+export interface AgentVersion extends AgentPayload {
+  id: number;
+  requisition_id: number | null;
+  version: number;
+  hunar_agent_id: string | null;
+  // Read back from Hunar after creation. Deliberately separate from what we
+  // sent: Hunar derives custom_variables from {token}s in the prompt, and the
+  // difference between the two is the thing the agent panel exists to show.
+  custom_variables: string[];
+  required_variables: string[];
+  result_variables: string[];
+}
+
+// --- candidates -----------------------------------------------------------
+
+export interface MappingProposal {
+  headers: string[];
+  row_count: number;
+  /** null means the backend could not tell which column this is. */
+  mapping: Record<string, string | null>;
+  required_variables: string[];
+  preview: Record<string, string>[];
+}
+
+export interface ImportProblem {
+  row: number;
+  phone: string | null;
+  reasons: string[];
+}
+
+export interface ImportSummary {
+  total: number;
+  imported: number;
+  rejected: number;
+  duplicates_in_file: number;
+  duplicates_existing: number;
+  do_not_call: number;
+  problems: ImportProblem[];
+}
+
+export interface Candidate {
+  id: number;
+  requisition_id: number | null;
+  name: string;
+  phone_e164: string;
+  source: string;
+  status: string;
+  custom_fields: Record<string, unknown>;
+}
+
+export interface CandidatePage {
+  total: number;
+  page: number;
+  page_size: number;
+  results: Candidate[];
+}
+
+export interface PreflightReport {
+  candidates: number;
+  dialable: number;
+  excluded: { candidate_id: number; name: string; reasons: string[] }[];
+  agent_version_id: number | null;
+  hunar_agent_id: string | null;
+  required_variables: string[];
+  ready: boolean;
+  blockers: string[];
+}
+
+// --- campaigns ------------------------------------------------------------
+
+export interface Guardrails {
+  allowed_days: string[];
+  earliest_call_time: string;
+  last_call_time: string;
+}
+
+export interface RetryConfig {
+  max_retry_count: number | null;
+  retry_interval_hours: number | null;
+}
+
+export interface CampaignCreate {
+  requisition_id: number;
+  name: string;
+  agent_version_id?: number | null;
+  guardrails?: Guardrails | null;
+  retry_config?: RetryConfig | null;
+  timezone: string;
+}
+
+export interface CampaignEstimate {
+  calls_to_place: number;
+  worst_case_attempts: number;
+  estimated_talk_minutes_if_all_connect: number;
+  assumptions: string[];
+  unknown: string[];
+}
+
+export interface CampaignDetail {
+  id: number;
+  name: string;
+  requisition_id: number | null;
+  agent_version_id: number;
+  request_id: string | null;
+  status: string;
+  dispatch_error: string | null;
+  dispatched_at: string | null;
+  total_calls: number;
+  funnel: Record<string, number>;
+  dialling_now: boolean;
+  dial_starts_at: string | null;
+  dial_window_note: string;
+  estimate: CampaignEstimate;
+}
+
+export interface Call {
+  id: number;
+  candidate_id: number;
+  candidate_name: string;
+  hunar_call_id: string | null;
+  stage: string;
+  status: string | null;
+  lifecycle_status: string | null;
+  engagement_status: string | null;
+  retry_count: number;
+  retries_left: number | null;
+  next_retry_scheduled_at: string | null;
+  dispatch_error: string | null;
+  has_result: boolean;
+}
+
+export interface CampaignPage {
+  total: number;
+  page: number;
+  page_size: number;
+  results: Call[];
+}

@@ -17,6 +17,8 @@ os.environ["DATABASE_URL"] = "postgresql+asyncpg://unused:unused@localhost/unuse
 os.environ["DEMO_MODE"] = "false"
 os.environ["HUNAR_API_KEY"] = "test-webhook-signing-key"
 
+import socket  # noqa: E402
+
 import pytest  # noqa: E402
 from httpx import ASGITransport, AsyncClient  # noqa: E402
 from sqlalchemy.ext.asyncio import (  # noqa: E402
@@ -47,6 +49,49 @@ async def session_factory():
         await conn.run_sync(Base.metadata.create_all)
     yield async_sessionmaker(engine, expire_on_commit=False)
     await engine.dispose()
+
+
+# Anything else is the internet.
+_LOOPBACK = {"127.0.0.1", "::1", "localhost", "", None}
+
+
+@pytest.fixture(autouse=True)
+def _block_outbound_network(monkeypatch):
+    """Fail any test that opens a connection off this machine, naming the host.
+
+    Permanent rather than an ad-hoc check, so a future task that introduces an
+    outbound call fails on the spot instead of quietly reaching the internet —
+    which is how the live Hunar calls in task 8 went unnoticed until a key
+    happened to 401.
+
+    Both hooks matter. `connect` catches the socket path, and `getaddrinfo`
+    catches anything that resolves a hostname first, including asyncio transports
+    on Windows that do not go through `socket.connect` at all.
+    """
+    real_connect = socket.socket.connect
+    real_getaddrinfo = socket.getaddrinfo
+
+    def guarded_connect(self, address):
+        host = address[0] if isinstance(address, tuple) else address
+        if host not in _LOOPBACK:
+            raise AssertionError(
+                f"This test opened a network connection to {host!r}. "
+                "Tests must not reach outside this machine; use the simulator or "
+                "an injected httpx transport."
+            )
+        return real_connect(self, address)
+
+    def guarded_getaddrinfo(host, *args, **kwargs):
+        if host not in _LOOPBACK:
+            raise AssertionError(
+                f"This test resolved the hostname {host!r}. "
+                "Tests must not reach outside this machine; use the simulator or "
+                "an injected httpx transport."
+            )
+        return real_getaddrinfo(host, *args, **kwargs)
+
+    monkeypatch.setattr(socket.socket, "connect", guarded_connect)
+    monkeypatch.setattr(socket, "getaddrinfo", guarded_getaddrinfo)
 
 
 @pytest.fixture(autouse=True)
