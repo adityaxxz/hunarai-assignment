@@ -237,5 +237,19 @@ this key and I previously concluded we had no outbound number. Wrong: both calls
 were placed with `from_phone_number` populated automatically by Hunar (an Indian
 number ending 9599). The org has a number; this key simply cannot list it.
 
-**The guardrail floor is real and still stands:**
-`400 {"message": "Minimum allowed earliest_call_time is 08:00."}`
+**The org calling window is 08:00 to 21:00, and both bounds are real:**
+
+```
+400 {"message": "Minimum allowed earliest_call_time is 08:00."}
+400 {"message": "Maximum allowed last_call_time is 21:00."}
+```
+
+Neither bound appears in any documentation. Each was learned from a 400 on a
+live dispatch attempt, and each one cost a failed campaign to find — the floor
+during the task 3.5 capture, the ceiling later, from a launch that requested
+09:00 to 22:00. `services/campaign.py` now rejects both before dispatch.
+
+Worth stating because it generalises: the org policy surface is discoverable
+only by hitting it. There may be further bounds on `allowed_days` or on the
+window width that we have not tripped yet, and the shape of the error message is
+the only thing that makes them recognisable when we do.

@@ -10,7 +10,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { ORG_EARLIEST_CALL_TIME } from "@/lib/campaign-rules";
+import { ORG_EARLIEST_CALL_TIME, ORG_LATEST_CALL_TIME } from "@/lib/campaign-rules";
 import { RETRY_INTERVALS, WEEKDAYS } from "@/lib/vocab";
 
 export interface Schedule {
@@ -47,8 +47,8 @@ export function ScheduleFields({
         </label>
         {!schedule.useGuardrails && (
           <p className="text-xs text-muted-foreground">
-            The organisation default applies, which permits no calling before{" "}
-            {ORG_EARLIEST_CALL_TIME}.
+            The organisation default applies, which permits calling only between{" "}
+            {ORG_EARLIEST_CALL_TIME} and {ORG_LATEST_CALL_TIME}.
           </p>
         )}
         {schedule.useGuardrails && (
@@ -77,8 +77,13 @@ export function ScheduleFields({
             <div className="grid gap-3 sm:grid-cols-2">
               <div className="space-y-1.5">
                 <Label className="text-xs text-muted-foreground">Earliest</Label>
+                {/* min/max bound the native stepper, so the window cannot be
+                    walked outside the org policy. They do not stop a typed or
+                    pasted value, which is why checkGuardrails still runs. */}
                 <Input
                   type="time"
+                  min={ORG_EARLIEST_CALL_TIME}
+                  max={ORG_LATEST_CALL_TIME}
                   value={schedule.earliest}
                   onChange={(e) => set("earliest", e.target.value)}
                 />
@@ -87,6 +92,8 @@ export function ScheduleFields({
                 <Label className="text-xs text-muted-foreground">Latest</Label>
                 <Input
                   type="time"
+                  min={ORG_EARLIEST_CALL_TIME}
+                  max={ORG_LATEST_CALL_TIME}
                   value={schedule.latest}
                   onChange={(e) => set("latest", e.target.value)}
                 />

@@ -12,13 +12,17 @@ from datetime import date, datetime, time, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-# Observed as a hard org policy floor, returned as
+# The org calling window is 08:00 to 21:00. **Both bounds were learned from 400s
+# on live dispatch attempts, not from any documentation**, and each one cost a
+# failed campaign to find:
 #   400 {"message": "Minimum allowed earliest_call_time is 08:00."}
-# It is documented nowhere. Section 10 of notes.md says guardrails may exceed the
-# org default when from_phone_number is supplied — that exemption is unavailable
-# to us: GET /numbers/ returns count 0 for our key, even though Hunar populates a
+#   400 {"message": "Maximum allowed last_call_time is 21:00."}
+# Section 10 of notes.md says guardrails may exceed the org default when
+# from_phone_number is supplied — that exemption is unavailable to us:
+# GET /numbers/ returns count 0 for our key, even though Hunar populates a
 # from_phone_number on the call automatically. See fixtures/observed_shapes.md.
 ORG_EARLIEST_CALL_TIME = time(8, 0)
+ORG_LATEST_CALL_TIME = time(21, 0)
 
 WEEKDAYS = ("MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN")
 MIN_DISTINCT_DAYS = 3
@@ -100,6 +104,12 @@ def validate_guardrails(guardrails: dict[str, Any] | None) -> list[str]:
             "organisation does not permit calling earlier, and supplying a "
             "from_phone_number does not lift that for this account"
         )
+    if latest > ORG_LATEST_CALL_TIME:
+        problems.append(
+            f"last_call_time cannot be after {ORG_LATEST_CALL_TIME:%H:%M}; the "
+            "organisation does not permit calling later, and supplying a "
+            "from_phone_number does not lift that for this account"
+        )
     if earliest >= latest:
         problems.append("earliest_call_time must be before last_call_time")
     else:
@@ -178,8 +188,8 @@ def next_dial_start(
             None,
             False,
             "No guardrails set, so the organisation's default calling window "
-            f"applies (no earlier than {ORG_EARLIEST_CALL_TIME:%H:%M} {timezone_name}). "
-            "Calls outside it are scheduled rather than rejected.",
+            f"applies ({ORG_EARLIEST_CALL_TIME:%H:%M} to {ORG_LATEST_CALL_TIME:%H:%M} "
+            f"{timezone_name}). Calls outside it are scheduled rather than rejected.",
         )
 
     days = set(guardrails["allowed_days"])

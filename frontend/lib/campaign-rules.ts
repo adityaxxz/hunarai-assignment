@@ -15,9 +15,13 @@
 import { RETRY_INTERVALS, WEEKDAYS } from "@/lib/vocab";
 import type { Guardrails, RetryConfig } from "@/lib/api/types";
 
-/** Observed as a hard org policy floor: Hunar answers 400 "Minimum allowed
- * earliest_call_time is 08:00." and documents it nowhere. */
+/** The org calling window, 08:00 to 21:00. Both bounds were learned from 400s on
+ * live dispatch attempts and are documented nowhere:
+ *   "Minimum allowed earliest_call_time is 08:00."
+ *   "Maximum allowed last_call_time is 21:00."
+ * Mirrors `ORG_EARLIEST_CALL_TIME` / `ORG_LATEST_CALL_TIME` in services/campaign.py. */
 export const ORG_EARLIEST_CALL_TIME = "08:00";
+export const ORG_LATEST_CALL_TIME = "21:00";
 const MIN_DISTINCT_DAYS = 3;
 const MIN_WINDOW_HOURS = 3;
 
@@ -67,6 +71,13 @@ export function checkGuardrails(guardrails: Guardrails | null): string[] {
       `earliest_call_time cannot be before ${ORG_EARLIEST_CALL_TIME}; the organisation ` +
         "does not permit calling earlier, and supplying a from_phone_number does not " +
         "lift that for this account",
+    );
+  }
+  if (latest > minutes(ORG_LATEST_CALL_TIME)!) {
+    problems.push(
+      `last_call_time cannot be after ${ORG_LATEST_CALL_TIME}; the organisation does ` +
+        "not permit calling later, and supplying a from_phone_number does not lift " +
+        "that for this account",
     );
   }
   if (earliest >= latest) {

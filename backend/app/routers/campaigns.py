@@ -33,6 +33,7 @@ from app.schemas import (
 )
 from app.services.campaign import (
     CampaignValidationError,
+    DialWindow,
     estimate,
     next_dial_start,
     validate_campaign,
@@ -438,6 +439,36 @@ def _call_read(call: Call, candidate: Candidate) -> CallRead:
     )
 
 
+def _dial_window(campaign: Campaign, guardrails: dict[str, Any] | None) -> DialWindow:
+    """What to say about dialling, derived from what happened rather than from
+    what was asked for.
+
+    The bug this fixes: a campaign that had just failed with a 400 reported
+    "Inside the calling window now (09:00-22:00), so dialling starts immediately"
+    beside a FAILED badge. `next_dial_start` was being handed the window we
+    *requested*, and it has no idea whether Hunar accepted it — so the system
+    confidently described a schedule that did not exist, using the very window
+    that had been refused.
+    """
+    if campaign.status is CampaignStatus.FAILED:
+        return DialWindow(
+            None,
+            False,
+            "Nothing was dispatched, so no calls are scheduled. Hunar rejected the "
+            f"request: {campaign.dispatch_error or 'no reason was given'}",
+        )
+
+    window = next_dial_start(guardrails, campaign.timezone)
+    if campaign.status is CampaignStatus.PARTIALLY_DISPATCHED:
+        return DialWindow(
+            window.starts_at,
+            window.dialling_now,
+            f"{window.explanation} This covers the calls Hunar accepted; the rest "
+            "were never dispatched.",
+        )
+    return window
+
+
 async def _detail(session: AsyncSession, campaign: Campaign) -> CampaignDetail:
     rows = (
         await session.execute(
@@ -456,7 +487,7 @@ async def _detail(session: AsyncSession, campaign: Campaign) -> CampaignDetail:
         if campaign.allowed_days
         else None
     )
-    window = next_dial_start(guardrails, campaign.timezone)
+    window = _dial_window(campaign, guardrails)
     retry = (
         {"max_retry_count": campaign.max_retry_count,
          "retry_interval_hours": campaign.retry_interval_hours}

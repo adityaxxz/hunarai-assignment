@@ -62,6 +62,27 @@ def test_earliest_before_0800_is_rejected_naming_the_floor() -> None:
     )
 
 
+def test_last_call_after_2100_is_rejected_naming_the_ceiling() -> None:
+    """The other half of the org window, and it cost a failed live dispatch to
+    find: 400 "Maximum allowed last_call_time is 21:00." Documented nowhere."""
+    problems = validate_guardrails({**GOOD_GUARDRAILS, "last_call_time": "22:00"})
+
+    assert any("21:00" in p for p in problems)
+    assert any("from_phone_number" in p for p in problems), (
+        "must say the exemption is unavailable to us, since GET /numbers/ returns none"
+    )
+
+
+def test_the_full_org_window_is_accepted() -> None:
+    """08:00 to 21:00 exactly. Both bounds are inclusive, so the widest legal
+    window must not be rejected by an off-by-one."""
+    problems = validate_guardrails(
+        {**GOOD_GUARDRAILS, "earliest_call_time": "08:00", "last_call_time": "21:00"}
+    )
+
+    assert problems == []
+
+
 def test_a_two_hour_window_is_rejected() -> None:
     problems = validate_guardrails(
         {**GOOD_GUARDRAILS, "earliest_call_time": "09:00", "last_call_time": "11:00"}
@@ -356,10 +377,21 @@ async def test_a_total_dispatch_failure_marks_every_call(client, session, monkey
     )
 
     assert response.status_code == 201
-    assert response.json()["status"] == CampaignStatus.FAILED
+    body = response.json()
+    assert body["status"] == CampaignStatus.FAILED
     call = (await session.execute(select(Call))).scalar_one()
     assert "Subscription expired" in call.dispatch_error
     assert call.hunar_call_id is None
+
+    # A failed campaign has no dial window. Reporting "dialling starts
+    # immediately" beside a FAILED badge was a real bug: the note was computed
+    # from the window we requested, which says nothing about whether Hunar
+    # accepted it.
+    assert body["dialling_now"] is False
+    assert body["dial_starts_at"] is None
+    assert "Nothing was dispatched" in body["dial_window_note"]
+    assert "Subscription expired" in body["dial_window_note"]
+    assert "starts immediately" not in body["dial_window_note"]
 
 
 async def test_bad_guardrails_are_rejected_before_anything_is_written(
