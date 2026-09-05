@@ -108,7 +108,14 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
     response = await fetch(`${BASE_URL}${path}`, {
       ...init,
       signal: controller.signal,
-      headers: { "Content-Type": "application/json", ...init?.headers },
+      // Content-Type only when there is a body to describe. Setting it on a GET
+      // makes the request non-simple, which forces a CORS preflight: the browser
+      // sends an OPTIONS and waits for it before the real request. On Render's
+      // free tier that means a cold start is paid TWICE, and it adds a failure
+      // mode (a preflight that is rejected or times out) for no benefit.
+      headers: init?.body
+        ? { "Content-Type": "application/json", ...init?.headers }
+        : { ...init?.headers },
     });
   } catch (cause) {
     if (timedOut) {
