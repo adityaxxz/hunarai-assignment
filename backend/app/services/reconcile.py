@@ -281,18 +281,40 @@ async def _campaign_agent_id(session: AsyncSession, campaign: Campaign) -> str |
 
 
 async def _adopt(session: AsyncSession, campaign_id: int, api_call: ApiCall) -> bool:
-    """Bind a Hunar call we did not know about to a row still missing its id."""
-    orphan = (
+    """Bind a Hunar call we did not know about to the row for that phone number.
+
+    Matched on `mobile_number`, not on "the first row still missing an id". The
+    ordering heuristic this replaces was wrong under any concurrency: two rows
+    awaiting ids meant a coin flip, and losing it attributes one candidate's
+    screening result — their licence, their availability, their rejection — to a
+    different person. That is the worst class of bug this system can have, and it
+    would look like working software.
+
+    Phone number is a safe key within a campaign because Hunar's bulk endpoint
+    defaults `remove_duplicate_phone_numbers` to true, so a batch cannot contain
+    the same number twice, and our own import dedupes on the normalised number
+    before that.
+    """
+    from app.models import Candidate
+
+    if not api_call.mobile_number:
+        return False
+
+    row = (
         await session.execute(
-            select(Call).where(
-                Call.campaign_id == campaign_id, Call.hunar_call_id.is_(None)
+            select(Call)
+            .join(Candidate, Call.candidate_id == Candidate.id)
+            .where(
+                Call.campaign_id == campaign_id,
+                Call.hunar_call_id.is_(None),
+                Candidate.phone_e164 == api_call.mobile_number,
             )
         )
     ).scalars().first()
-    if orphan is None:
+    if row is None:
         return False
-    orphan.hunar_call_id = api_call.id
-    apply_call_update(orphan, update_from_api(api_call))
+    row.hunar_call_id = api_call.id
+    apply_call_update(row, update_from_api(api_call))
     return True
 
 

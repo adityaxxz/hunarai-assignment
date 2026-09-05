@@ -6,6 +6,7 @@ other we discover.
 """
 
 import re
+from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -179,3 +180,77 @@ class PreflightReport(BaseModel):
     required_variables: list[str]
     ready: bool
     blockers: list[str]
+
+
+class GuardrailsIn(BaseModel):
+    """Loose on purpose. `services/campaign.py` does the checking so it can report
+    every problem at once with a message a recruiter can act on, rather than
+    Pydantic reporting the first field that failed."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    allowed_days: list[str] = Field(default_factory=list)
+    earliest_call_time: str = ""
+    last_call_time: str = ""
+
+
+class RetryConfigIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    max_retry_count: int | None = None
+    retry_interval_hours: int | None = None
+
+
+class CampaignCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    requisition_id: int
+    name: str = Field(min_length=1, max_length=200)
+    # Defaults to the newest agent version that has actually been pushed to Hunar.
+    agent_version_id: int | None = None
+    guardrails: GuardrailsIn | None = None
+    retry_config: RetryConfigIn | None = None
+    timezone: str = "Asia/Kolkata"
+    from_phone_number: str | None = None
+
+
+class CallRead(BaseModel):
+    id: int
+    candidate_id: int
+    candidate_name: str
+    hunar_call_id: str | None
+    stage: str
+    status: str | None
+    lifecycle_status: str | None
+    engagement_status: str | None
+    retry_count: int
+    retries_left: int | None
+    next_retry_scheduled_at: datetime | None
+    dispatch_error: str | None
+    has_result: bool
+
+
+class CampaignPage(BaseModel):
+    total: int
+    page: int
+    page_size: int
+    results: list[CallRead]
+
+
+class CampaignDetail(BaseModel):
+    id: int
+    name: str
+    requisition_id: int | None
+    agent_version_id: int
+    request_id: str | None
+    status: str
+    dispatch_error: str | None
+    dispatched_at: datetime | None
+    total_calls: int
+    funnel: dict[str, int]
+    # Stated because a call outside the window is scheduled, not rejected, and a
+    # recruiter who hears nothing will otherwise assume the product is broken.
+    dialling_now: bool
+    dial_starts_at: datetime | None
+    dial_window_note: str
+    estimate: dict[str, Any]
