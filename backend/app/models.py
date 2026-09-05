@@ -265,6 +265,15 @@ class Call(Base, TimestampMixin):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
+    # Reconciliation bookkeeping. Hunar only sends one status webhook, at the
+    # terminal transition, so polling is the primary source of funnel movement
+    # rather than a repair mechanism, and it needs to remember what it has done.
+    last_reconciled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Set when we stop chasing a result that is never going to arrive. Recorded
+    # rather than left pending forever, so "we gave up" is a visible state.
+    reconcile_stopped_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    reconcile_stopped_reason: Mapped[str | None] = mapped_column(String(120))
+
     campaign: Mapped["Campaign"] = relationship(back_populates="calls")
     candidate: Mapped["Candidate"] = relationship(back_populates="calls")
 

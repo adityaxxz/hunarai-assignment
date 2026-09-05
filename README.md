@@ -100,7 +100,27 @@ calls, which looks like flaky infrastructure rather than a config mistake.
    `https://hunar-fde-backend.onrender.com` — **no trailing slash**.
 5. Deploy, then go back to Render and set `FRONTEND_ORIGIN` to the Vercel URL.
 
-### 3. Order of operations
+### 3. Cron jobs (cron-job.org)
+
+Render's free tier has no scheduler, so both jobs run externally. Two entries:
+
+| Every | Method | URL | Header |
+| --- | --- | --- | --- |
+| 10 min | GET | `https://<render-url>/internal/health-ping` | none |
+| 1 min | POST | `https://<render-url>/internal/reconcile` | `Authorization: Bearer <INTERNAL_API_TOKEN>` |
+
+The ping exists only to stop the 15-minute spin-down, and deliberately touches no
+database. The reconcile job returns counts (`examined`, `updated`, `gave_up`,
+`errors`, `quota_exhausted`) so the cron history shows whether anything is
+actually moving rather than just a bare 200. `quota_exhausted: true` means the
+Hunar account is out of calling minutes and every call will fail until that is
+resolved.
+
+One minute is the finest granularity cron-job.org offers and is far too coarse
+for a funnel someone is watching, which is why the campaign views also reconcile
+on demand. The cron is the backstop for when nobody is looking.
+
+### 4. Order of operations
 
 The two services reference each other, so one value is unknown on each first
 pass. Deploy the backend, deploy the frontend with the backend's URL, then update
