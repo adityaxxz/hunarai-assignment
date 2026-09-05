@@ -1,0 +1,122 @@
+/*
+ * Styles for the rendered design document.
+ *
+ * Plain CSS rather than @tailwindcss/typography, which is another dependency
+ * pulled in for exactly one page, and rather than thirty `[&_h2]:mt-10`
+ * arbitrary variants, which nobody can read six months later. Everything here
+ * uses the theme tokens already defined in globals.css, so the document follows
+ * light and dark mode without knowing they exist.
+ */
+
+.markdown {
+  /* The measure, not the container. Around 70 characters is where long prose
+     stops being tiring to read; this document is 337 lines of it. Tables opt out
+     below, because a table squeezed to 70 characters is unreadable in a
+     different way. */
+  max-width: 70ch;
+  line-height: 1.7;
+}
+
+.markdown h1 {
+  font-size: 1.5rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.3;
+  margin-bottom: 0.5rem;
+}
+
+.markdown h2 {
+  font-size: 1.125rem;
+  font-weight: 600;
+  line-height: 1.4;
+  margin-top: 2.5rem;
+  margin-bottom: 0.75rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--border);
+}
+
+.markdown h3 {
+  font-size: 1rem;
+  font-weight: 600;
+  margin-top: 1.75rem;
+  margin-bottom: 0.5rem;
+}
+
+.markdown p {
+  margin-bottom: 1rem;
+}
+
+.markdown em {
+  color: var(--muted-foreground);
+}
+
+.markdown strong {
+  font-weight: 600;
+}
+
+.markdown code {
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-size: 0.85em;
+  background: var(--muted);
+  border-radius: 0.25rem;
+  padding: 0.1em 0.35em;
+}
+
+.markdown blockquote {
+  /* This one carries the words the voice agent actually speaks, so it is meant
+     to read as a quotation rather than as a callout. */
+  margin: 1.5rem 0;
+  padding-left: 1rem;
+  border-left: 2px solid var(--border);
+  color: var(--muted-foreground);
+  font-style: italic;
+}
+
+.markdown blockquote p:last-child {
+  margin-bottom: 0;
+}
+
+.markdown hr {
+  margin: 2rem 0;
+  border: 0;
+  border-top: 1px solid var(--border);
+}
+
+/* Tables break out of the reading measure and scroll on their own, so a wide
+   comparison table never forces the whole page to scroll sideways on a phone. */
+.markdown .table-scroll {
+  max-width: min(100%, 56rem);
+  overflow-x: auto;
+  margin: 1.5rem 0;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+}
+
+.markdown table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+
+.markdown th,
+.markdown td {
+  text-align: left;
+  padding: 0.625rem 0.875rem;
+  vertical-align: top;
+}
+
+.markdown th {
+  font-weight: 500;
+  white-space: nowrap;
+  background: var(--muted);
+}
+
+.markdown tbody tr {
+  border-top: 1px solid var(--border);
+}
+
+.markdown a {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
