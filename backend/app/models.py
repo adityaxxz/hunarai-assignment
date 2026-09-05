@@ -53,6 +53,17 @@ class CandidateSource(StrEnum):
     MANUAL = "MANUAL"
 
 
+class RequisitionKind(StrEnum):
+    """What the agent built from this requisition is for.
+
+    Drives the tone of the generated prompt and nothing else. A screening call
+    reaches someone who applied; a sourcing call reaches a stranger at work.
+    """
+
+    SCREENING = "SCREENING"
+    SOURCING = "SOURCING"
+
+
 class CampaignKind(StrEnum):
     SCREENING = "SCREENING"
     SOURCING = "SOURCING"
@@ -112,6 +123,10 @@ class Requisition(Base, TimestampMixin):
     __tablename__ = "requisitions"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    kind: Mapped[RequisitionKind] = mapped_column(
+        _enum(RequisitionKind), default=RequisitionKind.SCREENING,
+        server_default=RequisitionKind.SCREENING.value,
+    )
     title: Mapped[str] = mapped_column(String(200))
     location: Mapped[str] = mapped_column(String(200))
     # Singular: a Hunar agent speaks exactly one language, so a requisition

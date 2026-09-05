@@ -26,6 +26,11 @@ import type {
   PreflightReport,
   Requisition,
   RequisitionInput,
+  SearchRun,
+  SourcingImportResult,
+  SourcingInsights,
+  SourcingProfile,
+  SourcingSearch,
 } from "@/lib/api/types";
 
 const BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
@@ -317,4 +322,34 @@ export function overrideDecision(
  */
 export function recordingUrl(callId: number): string {
   return `${BASE_URL}/calls/${callId}/recording`;
+}
+
+// --- sourcing (Module B) --------------------------------------------------
+
+export function createSourcingSearch(jd_text: string): Promise<SourcingSearch> {
+  return post<SourcingSearch>("/sourcing/searches", { jd_text });
+}
+
+export function runSourcingSearch(
+  searchId: number,
+  query: Record<string, unknown>,
+  limit = 10,
+): Promise<SearchRun> {
+  return post<SearchRun>(`/sourcing/searches/${searchId}/run`, { query, limit });
+}
+
+export function importSourced(
+  searchId: number,
+  body: {
+    title: string;
+    location: string;
+    profiles: SourcingProfile[];
+    confirm: boolean;
+  },
+): Promise<SourcingImportResult> {
+  return post<SourcingImportResult>(`/sourcing/searches/${searchId}/import`, body);
+}
+
+export function getSourcingInsights(campaignId: number): Promise<SourcingInsights> {
+  return apiFetch<SourcingInsights>(`/sourcing/campaigns/${campaignId}/insights`);
 }

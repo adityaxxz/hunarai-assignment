@@ -31,7 +31,7 @@ introduction contained `{callee_name}` and got `custom_variables: []` back. See
 import re
 
 from app.integrations.hunar.types import AgentCreate
-from app.models import Requisition
+from app.models import Requisition, RequisitionKind
 from app.schemas import Criterion
 
 # The org account is shared and already holds 100+ agents from other people's
@@ -91,6 +91,17 @@ def _result_schema(criteria: list[Criterion]) -> dict[str, str]:
 def _introduction(requisition: Requisition) -> str:
     # {callee_name} is a required variable, always populated by Hunar, and does
     # NOT become a custom variable.
+    if requisition.kind is RequisitionKind.SOURCING:
+        # Colder, and it asks. This person did not apply, is probably at work,
+        # and has every right to say no before hearing anything else. Opening
+        # with the pitch instead of the permission is how a sourcing call becomes
+        # a complaint.
+        return (
+            f"Hello, am I speaking with {{callee_name}}? My name is Neha and I am "
+            f"calling from a recruitment team about a {requisition.title} role in "
+            f"{requisition.location}. This is not a sales call and it will take two "
+            f"minutes. Is now an alright time to talk?"
+        )
     return (
         f"Hello, am I speaking with {{callee_name}}? "
         f"I am calling about the {requisition.title} opening in {requisition.location}."
@@ -98,14 +109,35 @@ def _introduction(requisition: Requisition) -> str:
 
 
 def _objective(requisition: Requisition) -> str:
+    if requisition.kind is RequisitionKind.SOURCING:
+        return (
+            f"Find out whether this person is open to a {requisition.title} role in "
+            f"{requisition.location}, and if they are, capture what it would take. "
+            f"Leave politely at the first sign they are not interested."
+        )
     return (
         f"Screen the candidate for the {requisition.title} role in "
         f"{requisition.location} and record their answers to each question."
     )
 
 
-def _agent_prompt(requisition: Requisition, criteria: list[Criterion]) -> str:
-    lines = [
+def _opening_lines(requisition: Requisition) -> list[str]:
+    """How the agent is told to behave. The only real difference between the two
+    kinds of call, and it is entirely about who picked up."""
+    if requisition.kind is RequisitionKind.SOURCING:
+        return [
+            f"You are a recruiter making a first approach about a {requisition.title} "
+            f"role in {requisition.location}. The person you are calling did not "
+            f"apply for anything. They have not heard of you.",
+            "",
+            "Ask permission before anything else and accept the answer. If they say "
+            "it is a bad time, offer to call back and ask when, then end the call. "
+            "If they say they are not looking, thank them and end the call — do not "
+            "argue, do not pitch, do not ask why. Never imply they applied. Never "
+            "say another company sent you. Keep the whole call under two minutes.",
+            "",
+        ]
+    return [
         f"You are a hiring screener calling about a {requisition.title} role in "
         f"{requisition.location}.",
         "",
@@ -115,6 +147,10 @@ def _agent_prompt(requisition: Requisition, criteria: list[Criterion]) -> str:
         "the role unless asked. Keep the whole call under two minutes.",
         "",
     ]
+
+
+def _agent_prompt(requisition: Requisition, criteria: list[Criterion]) -> str:
+    lines = _opening_lines(requisition)
 
     details = []
     if requisition.shift:
@@ -139,14 +175,15 @@ def _agent_prompt(requisition: Requisition, criteria: list[Criterion]) -> str:
     lines.append("Ask these questions, in this order:")
     for index, criterion in enumerate(criteria, start=1):
         lines.append(f"{index}. {criterion.question}")
-    lines.extend(
-        [
-            "",
-            "If the candidate cannot answer a question, move on rather than "
-            "pressing. Thank them and end the call once you have asked all of "
-            "them or it is clear they do not want to continue.",
-        ]
+    closing = (
+        "Stop asking questions the moment they say they are not interested, and "
+        "thank them for their time. Otherwise ask what you can and end politely."
+        if requisition.kind is RequisitionKind.SOURCING
+        else "If the candidate cannot answer a question, move on rather than "
+        "pressing. Thank them and end the call once you have asked all of them "
+        "or it is clear they do not want to continue."
     )
+    lines.extend(["", closing])
     return "\n".join(lines)
 
 

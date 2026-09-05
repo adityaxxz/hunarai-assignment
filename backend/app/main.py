@@ -5,7 +5,15 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
-from app.routers import calls, campaigns, candidates, internal, requisitions, webhooks
+from app.routers import (
+    calls,
+    campaigns,
+    candidates,
+    internal,
+    requisitions,
+    sourcing,
+    webhooks,
+)
 from app.startup import run_migrations
 
 VERSION = "0.1.0"
@@ -35,6 +43,7 @@ app.include_router(requisitions.router)
 app.include_router(candidates.router)
 app.include_router(campaigns.router)
 app.include_router(calls.router)
+app.include_router(sourcing.router)
 
 
 # Also the keep-warm target for the cron-job.org ping every 10 minutes: Render's

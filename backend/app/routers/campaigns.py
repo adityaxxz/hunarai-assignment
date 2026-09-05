@@ -105,7 +105,7 @@ async def create_campaign(
         raise HTTPException(status_code=422, detail={"problems": ["no candidate is dialable"]})
 
     campaign = Campaign(
-        kind=CampaignKind.SCREENING,
+        kind=CampaignKind(payload.kind),
         name=payload.name,
         requisition_id=requisition.id,
         agent_version_id=agent.id,
@@ -143,6 +143,22 @@ async def create_campaign(
     return await _detail(session, campaign)
 
 
+def _custom_data(candidate: Candidate, agent: AgentVersion) -> dict[str, Any] | None:
+    """Exactly the keys Hunar derived from the prompt, and nothing else.
+
+    Filtered against `agent.custom_variables` — the read-back, which is the only
+    authoritative statement of what Hunar will accept. Sending anything extra
+    returns 422 "Custom data keys are not present", so a candidate carrying
+    bookkeeping fields (a LinkedIn URL, which resolver found their number) would
+    otherwise fail the whole batch. It also closes a latent bug in Module A: a
+    candidate imported before a variable was removed from the requisition still
+    holds the stale key.
+    """
+    allowed = set(agent.custom_variables or [])
+    data = {k: v for k, v in (candidate.custom_fields or {}).items() if k in allowed}
+    return data or None
+
+
 async def _dispatch(
     session: AsyncSession,
     campaign: Campaign,
@@ -160,7 +176,7 @@ async def _dispatch(
             BulkCallRecipient(
                 callee_name=c.name,
                 mobile_number=c.phone_e164,
-                custom_data=c.custom_fields or None,
+                custom_data=_custom_data(c, agent),
             )
             for c in candidates
         ],

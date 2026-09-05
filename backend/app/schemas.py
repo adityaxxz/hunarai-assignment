@@ -49,6 +49,7 @@ class Criterion(BaseModel):
 class RequisitionBase(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    kind: Literal["SCREENING", "SOURCING"] = "SCREENING"
     title: str = Field(min_length=2, max_length=200)
     location: str = Field(min_length=2, max_length=200)
     language: Language = Language.ENGLISH
@@ -206,6 +207,10 @@ class CampaignCreate(BaseModel):
 
     requisition_id: int
     name: str = Field(min_length=1, max_length=200)
+    # SOURCING marks a batch that reaches people who did not apply. It changes
+    # nothing about dispatch — same endpoint, same rows, same webhooks — and
+    # exists so the funnel can be filtered and reported on separately.
+    kind: Literal["SCREENING", "SOURCING"] = "SCREENING"
     # Defaults to the newest agent version that has actually been pushed to Hunar.
     agent_version_id: int | None = None
     guardrails: GuardrailsIn | None = None
@@ -378,3 +383,117 @@ class CallDetail(BaseModel):
     recording_simulated: bool
 
     timeline: list[CallEventRead]
+
+
+# --- sourcing (Module B) ---------------------------------------------------
+
+# Mirrors services/contact_resolution.RESOLVER_LABELS. Re-exported here so the
+# router imports one module for its response shapes.
+RESOLVER_LABELS: dict[str, str] = {
+    "provider": "From the search provider",
+    "fixture": "Demo number",
+    "unresolved": "No number found",
+}
+
+
+class SourcingSearchCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    jd_text: str = Field(min_length=20, max_length=20_000)
+
+
+class SourcingSearchOut(BaseModel):
+    id: int
+    jd_text: str
+    query: dict[str, Any]
+    # "gemini" or "fallback". Shown on screen, because a recruiter who believes a
+    # model read their JD will trust a keyword-extracted query more than it earns.
+    query_source: str
+    note: str
+    titles: list[str]
+    locations: list[str]
+    provider: str
+
+
+class SearchRunIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # The edited query, not the generated one. The model proposes; the person
+    # sending this request decides.
+    query: dict[str, Any]
+    limit: int = Field(default=10, ge=1, le=25)
+
+
+class SourcingProfileOut(BaseModel):
+    full_name: str
+    headline: str | None
+    current_title: str | None
+    current_company: str | None
+    location: str | None
+    linkedin_url: str | None
+    dedupe_key: str
+    phone_e164: str | None
+    resolver: str
+    resolver_label: str
+    resolver_detail: str
+    already_a_candidate: bool
+    do_not_call: bool
+
+
+class SearchRunOut(BaseModel):
+    search_id: int
+    provider: str
+    total_available: int | None
+    notes: list[str]
+    dialable: int
+    profiles: list[SourcingProfileOut]
+
+
+class ProfileIn(BaseModel):
+    """One selected profile, sent back for import. Echoed from the search result
+    rather than re-fetched, because re-running the query would spend a second set
+    of credits to get the same rows."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    full_name: str = Field(min_length=1, max_length=200)
+    headline: str | None = None
+    current_title: str | None = None
+    current_company: str | None = None
+    location: str | None = None
+    linkedin_url: str | None = None
+    phone_e164: str | None = None
+    resolver: str = "unresolved"
+
+
+class SourcingImportIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(min_length=2, max_length=200)
+    location: str = Field(min_length=2, max_length=200)
+    language: Language = Language.ENGLISH
+    voice_persona: VoicePersona = VoicePersona.NEHA
+    profiles: list[ProfileIn] = Field(default_factory=list)
+    # Not a formality. Nobody in this list applied, so dispatch is gated on a
+    # person having looked at it. See routers/sourcing.import_selected.
+    confirm: bool = False
+
+
+class SourcingImportOut(BaseModel):
+    requisition_id: int
+    imported: int
+    skipped: list[dict[str, str]]
+
+
+class SourcingInsights(BaseModel):
+    campaign_id: int
+    kind: str
+    total_calls: int
+    answered: int
+    interested: int
+    # Null rather than zero when nothing has been answered yet: 0% interest and
+    # "nobody has picked up" are different facts.
+    interest_rate: float | None
+    notice_period: dict[str, int]
+    objections: dict[str, int]
+    callback_times: list[str]

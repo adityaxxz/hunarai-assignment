@@ -150,6 +150,10 @@ export interface RetryConfig {
 export interface CampaignCreate {
   requisition_id: number;
   name: string;
+  /** SOURCING marks a batch that reaches people who did not apply. It changes
+   * nothing about dispatch — same endpoint, same rows — and exists so the funnel
+   * can be reported on separately. */
+  kind?: "SCREENING" | "SOURCING";
   agent_version_id?: number | null;
   guardrails?: Guardrails | null;
   retry_config?: RetryConfig | null;
@@ -298,4 +302,65 @@ export interface CallDetail {
   recording_simulated: boolean;
 
   timeline: CallEvent[];
+}
+
+// --- sourcing (Module B) --------------------------------------------------
+
+export interface SourcingSearch {
+  id: number;
+  jd_text: string;
+  query: Record<string, unknown>;
+  /** "gemini" or "fallback". Shown, because a keyword-extracted query should
+   * not be mistaken for one a model wrote. */
+  query_source: string;
+  note: string;
+  titles: string[];
+  locations: string[];
+  provider: string;
+}
+
+export interface SourcingProfile {
+  full_name: string;
+  headline: string | null;
+  current_title: string | null;
+  current_company: string | null;
+  location: string | null;
+  linkedin_url: string | null;
+  dedupe_key: string;
+  phone_e164: string | null;
+  /** "provider" | "fixture" | "unresolved". Which resolver produced the number. */
+  resolver: string;
+  resolver_label: string;
+  resolver_detail: string;
+  already_a_candidate: boolean;
+  do_not_call: boolean;
+}
+
+export interface SearchRun {
+  search_id: number;
+  provider: string;
+  total_available: number | null;
+  notes: string[];
+  dialable: number;
+  profiles: SourcingProfile[];
+}
+
+export interface SourcingImportResult {
+  requisition_id: number;
+  imported: number;
+  skipped: { name: string; reason: string }[];
+}
+
+export interface SourcingInsights {
+  campaign_id: number;
+  kind: string;
+  total_calls: number;
+  answered: number;
+  interested: number;
+  /** Null rather than zero when nothing has been answered: 0% interest and
+   * "nobody picked up" are different facts. */
+  interest_rate: number | null;
+  notice_period: Record<string, number>;
+  objections: Record<string, number>;
+  callback_times: string[];
 }
