@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { RotateCw } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -17,7 +18,13 @@ import { STAGE_LABELS } from "@/lib/vocab";
 
 const TERMINAL_BAD = new Set(["failed", "dispatch_failed"]);
 
-export function CallTable({ calls }: { calls: Call[] }) {
+export function CallTable({
+  calls,
+  campaignId,
+}: {
+  calls: Call[];
+  campaignId: number;
+}) {
   return (
     <Table>
       <TableHeader>
@@ -34,7 +41,14 @@ export function CallTable({ calls }: { calls: Call[] }) {
       <TableBody>
         {calls.map((call) => (
           <TableRow key={call.id}>
-            <TableCell className="font-medium">{call.candidate_name}</TableCell>
+            <TableCell>
+              <Link
+                href={`/campaigns/${campaignId}/calls/${call.id}`}
+                className="font-medium underline-offset-4 hover:underline"
+              >
+                {call.candidate_name}
+              </Link>
+            </TableCell>
             <TableCell>
               <Badge variant={TERMINAL_BAD.has(call.stage) ? "destructive" : "outline"}>
                 {STAGE_LABELS[call.stage] ?? call.stage}

@@ -195,6 +195,10 @@ export interface Call {
   next_retry_scheduled_at: string | null;
   dispatch_error: string | null;
   has_result: boolean;
+  // Terminal is not the same as finished: Hunar is eventually consistent after
+  // COMPLETED. A reason here means the backend stopped chasing a result.
+  reconcile_stopped_at: string | null;
+  reconcile_stopped_reason: string | null;
 }
 
 export interface CampaignPage {
@@ -202,4 +206,96 @@ export interface CampaignPage {
   page: number;
   page_size: number;
   results: Call[];
+}
+
+// --- call detail ----------------------------------------------------------
+
+export interface CriterionOutcome {
+  key: string;
+  question: string;
+  knockout: boolean;
+  weight: number;
+  value: unknown;
+  status: "pass" | "fail" | "unknown";
+  reason: string;
+}
+
+export interface Evaluation {
+  decision: string;
+  score: number;
+  reasons: CriterionOutcome[];
+}
+
+export interface CallEvent {
+  id: number;
+  event_type: string;
+  received_at: string;
+  processed_at: string | null;
+  processing_error: string | null;
+  /** False for an event that arrived before its call row existed. */
+  linked: boolean;
+}
+
+export interface Override {
+  decision: string;
+  reason_code: string;
+  reason_label: string;
+  note: string | null;
+  at: string;
+}
+
+export type OverrideReasonCode =
+  | "SPOKE_TO_CANDIDATE"
+  | "AGENT_MISHEARD"
+  | "RESULT_INCOMPLETE"
+  | "REQUIREMENTS_CHANGED"
+  | "OTHER";
+
+export interface OverrideInput {
+  decision: "QUALIFIED" | "REJECTED" | "UNDECIDED";
+  reason_code: OverrideReasonCode;
+  note: string | null;
+}
+
+export interface CallDetail {
+  id: number;
+  campaign_id: number;
+  hunar_call_id: string | null;
+  candidate_id: number;
+  candidate_name: string;
+  candidate_phone: string;
+  candidate_custom_fields: Record<string, unknown>;
+  requisition_id: number | null;
+  requisition_title: string | null;
+
+  stage: string;
+  status: string | null;
+  lifecycle_status: string | null;
+  engagement_status: string | null;
+  answered_by: string | null;
+  call_ended_by: string | null;
+  redial_status: string | null;
+  retry_count: number;
+  retries_left: number | null;
+  next_retry_scheduled_at: string | null;
+  duration_seconds: number | null;
+  user_speech_duration: number | null;
+  started_at: string | null;
+  ended_at: string | null;
+  dispatch_error: string | null;
+  last_reconciled_at: string | null;
+  reconcile_stopped_at: string | null;
+  reconcile_stopped_reason: string | null;
+
+  result: Record<string, unknown> | null;
+  evaluation: Evaluation | null;
+  override: Override | null;
+  /** The override where one exists, otherwise the computed decision. */
+  effective_decision: string | null;
+
+  recording_available: boolean;
+  /** True when the proxy serves generated silence rather than a real call. */
+  recording_simulated: boolean;
+
+  timeline: CallEvent[];
 }

@@ -228,6 +228,12 @@ class CallRead(BaseModel):
     next_retry_scheduled_at: datetime | None
     dispatch_error: str | None
     has_result: bool
+    # Both surfaced because terminal is not the same as finished. Hunar's API is
+    # eventually consistent after COMPLETED, so a settled call may still gain a
+    # result — or may never gain one. Without these the UI cannot tell "still
+    # settling" from "we stopped chasing it", and it guesses.
+    reconcile_stopped_at: datetime | None
+    reconcile_stopped_reason: str | None
 
 
 class CampaignPage(BaseModel):
@@ -254,3 +260,121 @@ class CampaignDetail(BaseModel):
     dial_starts_at: datetime | None
     dial_window_note: str
     estimate: dict[str, Any]
+
+
+# --- call detail -----------------------------------------------------------
+
+# A closed vocabulary, because the point of a reason code is that it can be
+# counted. Free text alone tells you a recruiter disagreed; it does not tell you
+# whether the agent keeps mishearing the same question.
+OverrideReasonCode = Literal[
+    "SPOKE_TO_CANDIDATE",
+    "AGENT_MISHEARD",
+    "RESULT_INCOMPLETE",
+    "REQUIREMENTS_CHANGED",
+    "OTHER",
+]
+
+OVERRIDE_REASON_LABELS: dict[str, str] = {
+    "SPOKE_TO_CANDIDATE": "I spoke to the candidate myself",
+    "AGENT_MISHEARD": "The agent misheard or mis-recorded an answer",
+    "RESULT_INCOMPLETE": "The call ended before the answers were complete",
+    "REQUIREMENTS_CHANGED": "The role requirements changed",
+    "OTHER": "Other",
+}
+
+
+class OverrideCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    decision: Literal["QUALIFIED", "REJECTED", "UNDECIDED"]
+    reason_code: OverrideReasonCode
+    note: str | None = Field(default=None, max_length=1000)
+
+    @model_validator(mode="after")
+    def _note_required_for_other(self) -> "OverrideCreate":
+        if self.reason_code == "OTHER" and not (self.note or "").strip():
+            # OTHER with no note is an override with no recorded reason, which is
+            # the one thing an audit trail must not contain.
+            raise ValueError("a note is required when the reason code is OTHER")
+        return self
+
+
+class CallEventRead(BaseModel):
+    """One row of the timeline. The raw body is deliberately not returned.
+
+    It can carry a phone number and the S3 recording URL, and this endpoint feeds
+    a browser. What the timeline is for is *when each event arrived and whether
+    it was processed* — that is what makes the webhook and reconcile behaviour
+    inspectable rather than theoretical.
+    """
+
+    id: int
+    event_type: str
+    received_at: datetime
+    processed_at: datetime | None
+    processing_error: str | None
+    # False for an event that arrived before its call row existed and was
+    # adopted later. Worth seeing: it is the orphan path actually happening.
+    linked: bool
+
+
+class OverrideRead(BaseModel):
+    decision: str
+    reason_code: str
+    reason_label: str
+    note: str | None
+    at: datetime
+
+
+class CallDetail(BaseModel):
+    """Everything the candidate detail screen needs, in one response.
+
+    One endpoint rather than five, because every part of it is read from the same
+    call row and the screen is useless with any piece missing.
+    """
+
+    id: int
+    campaign_id: int
+    hunar_call_id: str | None
+    candidate_id: int
+    candidate_name: str
+    candidate_phone: str
+    candidate_custom_fields: dict[str, Any]
+    requisition_id: int | None
+    requisition_title: str | None
+
+    stage: str
+    status: str | None
+    lifecycle_status: str | None
+    engagement_status: str | None
+    answered_by: str | None
+    call_ended_by: str | None
+    redial_status: str | None
+    retry_count: int
+    retries_left: int | None
+    next_retry_scheduled_at: datetime | None
+    duration_seconds: float | None
+    user_speech_duration: float | None
+    started_at: datetime | None
+    ended_at: datetime | None
+    dispatch_error: str | None
+    last_reconciled_at: datetime | None
+    reconcile_stopped_at: datetime | None
+    reconcile_stopped_reason: str | None
+
+    result: dict[str, Any] | None
+    # Recomputed on every read from the requisition's current criteria, never
+    # stamped on the row. See services/evaluation.py for why.
+    evaluation: EvaluationRead | None
+    override: OverrideRead | None
+    # What is acted on: the override where one exists, otherwise the computed
+    # decision. Resolved here so no consumer has to re-derive the precedence.
+    effective_decision: str | None
+
+    recording_available: bool
+    # True when the bytes the proxy serves are a generated silence rather than a
+    # real call. Said out loud so the player is never silently a lie.
+    recording_simulated: bool
+
+    timeline: list[CallEventRead]

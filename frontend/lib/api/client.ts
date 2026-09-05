@@ -13,6 +13,7 @@ import type {
   AgentPayload,
   AgentVersion,
   Call,
+  CallDetail,
   CampaignCreate,
   CampaignDetail,
   CampaignPage,
@@ -21,6 +22,7 @@ import type {
   Health,
   ImportSummary,
   MappingProposal,
+  OverrideInput,
   PreflightReport,
   Requisition,
   RequisitionInput,
@@ -290,4 +292,29 @@ export function isActive(call: Call): boolean {
   // A retry that has been scheduled is still live even though the last attempt
   // reached a terminal stage, so it counts as active too.
   return ACTIVE_STAGES.has(call.stage) || call.next_retry_scheduled_at !== null;
+}
+
+// --- one call -------------------------------------------------------------
+
+export function getCall(callId: number): Promise<CallDetail> {
+  return apiFetch<CallDetail>(`/calls/${callId}`);
+}
+
+export function overrideDecision(
+  callId: number,
+  input: OverrideInput,
+): Promise<CallDetail> {
+  return post<CallDetail>(`/calls/${callId}/override`, input);
+}
+
+/**
+ * The audio element's `src`. A URL, not a fetch: the browser needs to range-request
+ * it to scrub, and reading it into a blob first would download the whole file
+ * before anything played.
+ *
+ * It points at our backend, never at Hunar. The S3 URL never reaches the page —
+ * that is the entire reason the proxy exists.
+ */
+export function recordingUrl(callId: number): string {
+  return `${BASE_URL}/calls/${callId}/recording`;
 }

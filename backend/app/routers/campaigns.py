@@ -332,6 +332,8 @@ def _call_read(call: Call, candidate: Candidate) -> CallRead:
         next_retry_scheduled_at=call.next_retry_scheduled_at,
         dispatch_error=call.dispatch_error,
         has_result=bool(call.result),
+        reconcile_stopped_at=call.reconcile_stopped_at,
+        reconcile_stopped_reason=call.reconcile_stopped_reason,
     )
 
 

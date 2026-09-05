@@ -76,6 +76,12 @@ export default function CampaignDetailPage({
     return acc;
   }, {});
 
+  // Calls with no result yet and no recorded reason the backend gave up. These
+  // are the only ones a manual refresh could still change.
+  const settling = rows.filter(
+    (call) => !call.has_result && !call.reconcile_stopped_reason,
+  ).length;
+
   return (
     <PageContainer
       title={campaign.data.name}
@@ -92,16 +98,12 @@ export default function CampaignDetailPage({
             <span className="size-2 animate-pulse rounded-full bg-foreground" aria-hidden />
             Live, refreshing every {POLL_MS / 1000}s
           </span>
-        ) : (
-          // Terminal is not the same as complete. Hunar's API is eventually
-          // consistent after COMPLETED, so a call can be settled here while its
-          // result and engagement are still being backfilled by reconciliation.
-          // Polling on regardless would run forever on a call that will never
-          // produce a result, so the honest option is to stop and offer a
-          // refresh rather than spin indefinitely or pretend this is final.
+        ) : settling > 0 ? (
+          // Terminal is not the same as complete: Hunar is eventually consistent
+          // after COMPLETED. Polling on regardless would spin forever on a call
+          // that will never produce a result, so this stops and offers a refresh.
           <span className="flex items-center gap-2 text-xs text-muted-foreground">
-            Every call has reached a terminal status, so this has stopped
-            refreshing. Results can still arrive afterwards.
+            {settling} call{settling === 1 ? "" : "s"} may still produce a result.
             <button
               type="button"
               onClick={() => calls.refetch()}
@@ -109,6 +111,13 @@ export default function CampaignDetailPage({
             >
               Check again
             </button>
+          </span>
+        ) : (
+          // Every outstanding call carries a recorded reason reconciliation
+          // stopped, so there is nothing left to wait for and saying "check
+          // again" would invite a refresh that can never change anything.
+          <span className="text-xs text-muted-foreground">
+            Everything has settled. No further results are expected.
           </span>
         )}
         {campaign.data.requisition_id && (
@@ -154,7 +163,7 @@ export default function CampaignDetailPage({
             }". Select the stage again to show every call.`}
           />
         )}
-        {shown.length > 0 && <CallTable calls={shown} />}
+        {shown.length > 0 && <CallTable calls={shown} campaignId={id} />}
       </div>
     </PageContainer>
   );

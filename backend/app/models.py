@@ -353,6 +353,38 @@ class CallEvent(Base):
     processing_error: Mapped[str | None] = mapped_column(Text)
 
 
+class AuditLog(Base):
+    """Who changed a machine decision, when, and what it was before.
+
+    An eleventh table, beyond the ten notes.md lists, because a recruiter
+    override is the one write in this system that a human makes against the
+    machine's own conclusion. Storing only the new value on `calls` would lose
+    what was overruled, and "the model said REJECTED and a person said otherwise"
+    is exactly the record a hiring process has to be able to produce later.
+
+    Generic in shape but currently single-writer: the override endpoint is the
+    only thing that appends to it. `actor` is a plain string because there is no
+    authentication in this build — see the open question in current-status.md.
+    """
+
+    __tablename__ = "audit_log"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    entity_type: Mapped[str] = mapped_column(String(32), index=True)
+    entity_id: Mapped[int] = mapped_column(index=True)
+    action: Mapped[str] = mapped_column(String(64))
+    actor: Mapped[str] = mapped_column(String(120))
+    reason_code: Mapped[str | None] = mapped_column(String(64))
+    note: Mapped[str | None] = mapped_column(Text)
+    # Whole snapshots rather than a field-level diff: the interesting question is
+    # "what did the machine conclude", and that is decision plus score together.
+    before: Mapped[dict[str, Any] | None] = mapped_column(JSONColumn)
+    after: Mapped[dict[str, Any] | None] = mapped_column(JSONColumn)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
 class InterviewSlot(Base, TimestampMixin):
     __tablename__ = "interview_slots"
 
