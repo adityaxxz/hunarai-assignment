@@ -91,7 +91,7 @@ async def test_pdl_never_follows_scroll_token_and_caps_results() -> None:
 
     assert f'"size": {MAX_RESULTS}' in seen["body"].replace('"size":', '"size": ')
     assert len(result.profiles) == 5
-    assert any("4000" in note for note in result.notes), "truncation has to be visible"
+    assert any("4,000" in note for note in result.notes), "truncation has to be visible"
 
 
 async def test_pdl_quota_exhaustion_is_named_not_retried() -> None:
@@ -119,7 +119,7 @@ def test_a_profile_with_no_number_resolves_to_unresolved_not_an_error() -> None:
 
     assert resolved.dialable is False
     assert resolved.resolver == "unresolved"
-    assert "current plan" in resolved.detail
+    assert "no phone number for this person at all" in resolved.detail
 
 
 def test_the_resolver_is_named_on_every_record() -> None:
@@ -412,3 +412,64 @@ async def test_interest_rate_is_null_rather_than_zero_when_nobody_answered(
     body = (await client.get(f"/sourcing/campaigns/{campaign_id}/insights")).json()
 
     assert body["interest_rate"] is None
+
+
+# --- what PDL actually returns ---------------------------------------------
+
+
+async def test_a_gated_field_comes_back_as_the_boolean_true_not_null() -> None:
+    """Observed on a live record, and it crashed the first version of this code.
+
+    On a limited plan PDL substitutes the literal `true` for a field the plan
+    does not include — not null, not an absent key. `phone_numbers: true` was
+    iterated as a list, and `location_name: true` would have put the string
+    "True" in the location column of a recruiter's screen.
+    """
+    record = {
+        "full_name": "Rohit Acharya",
+        "job_title": "Instrumentation Engineer",
+        "job_company_name": "L&t Technology Services",
+        "job_company_location_name": "Bakrol, Gujarat, India",
+        "linkedin_url": "linkedin.com/in/rohit-acharya-1987ra",
+        "location_name": True,
+        "mobile_phone": True,
+        "phone_numbers": True,
+        "emails": True,
+    }
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"status": 200, "total": 7356, "data": [record]})
+
+    result = await PDLProvider("k", transport=httpx.MockTransport(handler)).search({}, 1)
+
+    profile = result.profiles[0]
+    assert profile.phone is None
+    assert profile.phone_available is True, "PDL says it has one, it just will not release it"
+    # Not the string "True", and flagged as the employer's office rather than
+    # passed off as where this person is.
+    assert profile.location == "Bakrol, Gujarat, India"
+    assert profile.location_is_company is True
+    assert profile.current_title == "Instrumentation Engineer"
+    # Returned without a scheme; a bare href resolves against our own origin.
+    assert profile.linkedin_url == "https://linkedin.com/in/rohit-acharya-1987ra"
+
+
+def test_withheld_and_absent_numbers_are_reported_differently() -> None:
+    """The difference is what tells a recruiter whether upgrading would help."""
+    withheld = SourcingProfile(full_name="Gated", phone_available=True)
+    absent = SourcingProfile(full_name="Nothing", phone_available=False)
+
+    assert "does not release it" in resolve(withheld, allow_fixture=False).detail
+    assert "no phone number for this person at all" in resolve(absent, allow_fixture=False).detail
+
+
+async def test_the_headline_count_separates_real_numbers_from_demo_ones(client) -> None:
+    """A live search returned ten profiles, none with a released number, and the
+    old summary said "10 with a number" above ten rows badged "Demo number"."""
+    search = await make_search(client)
+
+    found = await run(client, search["id"])
+
+    # The fixture set has one profile with no number of its own.
+    assert found["dialable"] == 10
+    assert found["from_provider"] == 9

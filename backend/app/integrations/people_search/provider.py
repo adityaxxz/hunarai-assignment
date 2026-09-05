@@ -1,9 +1,14 @@
 """Which people-search provider is live.
 
 Mirrors `integrations/hunar/provider.py` deliberately: same singleton shape, same
-reset helper for tests. Two switches rather than one, because they answer
-different questions — `PEOPLE_SEARCH_PROVIDER` says which vendor, `DEMO_MODE`
-says whether this deployment may talk to vendors at all.
+reset helper for tests.
+
+`PEOPLE_SEARCH_PROVIDER` is the only switch, and `DEMO_MODE` deliberately does
+not participate. It did at first, which was wrong: `DEMO_MODE` exists because the
+Hunar trial key expires and the deployed demo must survive it, so it is a
+statement about **dialling**, not about search. Coupling them made the most
+useful configuration unreachable — real PDL profiles with simulated calls, which
+is exactly what you want in a review meeting: honest data, nobody's phone rings.
 """
 
 from app.config import settings
@@ -22,9 +27,7 @@ def get_people_search_provider() -> PeopleSearchProvider:
 def _build() -> PeopleSearchProvider:
     from app.integrations.people_search.fixture import FixtureProvider
 
-    # Demo mode wins over the vendor setting. A deployment whose Hunar key has
-    # expired should not still be spending PDL credits.
-    if settings.demo_mode or settings.people_search_provider != "pdl":
+    if settings.people_search_provider != "pdl":
         return FixtureProvider()
 
     if not settings.pdl_api_key:

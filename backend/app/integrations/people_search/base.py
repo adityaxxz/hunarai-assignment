@@ -30,10 +30,24 @@ class SourcingProfile:
     location: str | None = None
     linkedin_url: str | None = None
 
-    # May be absent, and usually is. PDL's free tier returns availability counts
+    # May be absent, and usually is. PDL's free tier returns an availability flag
     # rather than the number itself, which is exactly why contact resolution is a
     # separate pipeline stage instead of a field read. See services/contact_resolution.py.
     phone: str | None = None
+
+    # "The provider holds a number for this person but this plan does not include
+    # it." Distinct from `phone is None`, which means it has nothing at all. Worth
+    # separating: the first is a billing decision and the second is a dead end,
+    # and a recruiter deciding whether to pay for an upgrade needs to know which
+    # of the two they are looking at.
+    phone_available: bool = False
+
+    # True when `location` is the employer's office rather than the person's own
+    # location, because PDL gates `location_name` on a limited plan. It matters:
+    # a live search filtered to India returned people whose company HQ is in
+    # Houston, and an unqualified "Location: Houston, Texas" reads as a fact
+    # about the candidate that is not true.
+    location_is_company: bool = False
 
     # Stable identity for deduplication inside one result set. LinkedIn URL where
     # there is one, otherwise the name and company together.

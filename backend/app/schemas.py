@@ -430,6 +430,9 @@ class SourcingProfileOut(BaseModel):
     current_title: str | None
     current_company: str | None
     location: str | None
+    # True when `location` is the employer's office, because the plan gates the
+    # person's own. Shown as such rather than passed off as where they are.
+    location_is_company: bool
     linkedin_url: str | None
     dedupe_key: str
     phone_e164: str | None
@@ -446,6 +449,9 @@ class SearchRunOut(BaseModel):
     total_available: int | None
     notes: list[str]
     dialable: int
+    # How many of those numbers the provider actually supplied, as opposed to a
+    # demo number standing in. The headline count is meaningless without it.
+    from_provider: int
     profiles: list[SourcingProfileOut]
 
 

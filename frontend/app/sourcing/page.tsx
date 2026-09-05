@@ -175,10 +175,17 @@ export default function SourcingPage() {
           <Card>
             <CardHeader>
               <CardTitle className="text-sm font-medium">
-                3. {run.profiles.length} profiles, {run.dialable} with a number
+                3. {run.profiles.length} profiles, {run.from_provider} with a number
+                from the provider
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-3">
+              {run.dialable > run.from_provider && (
+                <p className="text-xs text-muted-foreground">
+                  {run.dialable - run.from_provider} of these are dialable only because
+                  a demo number is standing in. Each is badged below.
+                </p>
+              )}
               {run.notes.map((note) => (
                 <p key={note} className="text-xs text-muted-foreground">
                   {note}

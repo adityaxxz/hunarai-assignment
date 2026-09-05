@@ -73,7 +73,12 @@ def resolve(profile: SourcingProfile, *, allow_fixture: bool) -> ResolvedContact
 
     return ResolvedContact(
         profile, None, "unresolved",
-        "the search provider has no phone number for this profile on the current plan",
+        # Two different facts, and the difference is what tells a recruiter
+        # whether paying for an upgrade would change anything.
+        "the search provider holds a number for this person but does not release "
+        "it on the current plan"
+        if profile.phone_available
+        else "the search provider has no phone number for this person at all",
     )
 
 

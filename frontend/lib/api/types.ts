@@ -325,6 +325,9 @@ export interface SourcingProfile {
   current_title: string | null;
   current_company: string | null;
   location: string | null;
+  /** True when `location` is the employer's office, because the plan gates the
+   * person's own location. */
+  location_is_company: boolean;
   linkedin_url: string | null;
   dedupe_key: string;
   phone_e164: string | null;
@@ -342,6 +345,8 @@ export interface SearchRun {
   total_available: number | null;
   notes: string[];
   dialable: number;
+  /** How many numbers the provider actually supplied, versus demo stand-ins. */
+  from_provider: number;
   profiles: SourcingProfile[];
 }
 

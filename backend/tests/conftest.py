@@ -16,6 +16,15 @@ os.environ["DATABASE_URL"] = "postgresql+asyncpg://unused:unused@localhost/unuse
 # one with a security consequence. Demo mode signs with its own generated key.
 os.environ["DEMO_MODE"] = "false"
 os.environ["HUNAR_API_KEY"] = "test-webhook-signing-key"
+# Pinned for the same reason DATABASE_URL is. A developer who switches their own
+# .env to the live provider must not thereby make the test suite spend People
+# Data Labs credits — the free tier is 100 records a month, and one full run of
+# these tests would have taken a chunk of it. Caught by the socket guard below
+# the first time it happened, which is what that guard is for. Tests that need
+# the PDL client build it directly with an injected httpx transport.
+os.environ["PEOPLE_SEARCH_PROVIDER"] = "fixture"
+os.environ["PDL_API_KEY"] = ""
+os.environ["GEMINI_API_KEY"] = ""
 
 import socket  # noqa: E402
 

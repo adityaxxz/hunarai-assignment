@@ -168,6 +168,7 @@ async def run_search(
             current_title=c.profile.current_title,
             current_company=c.profile.current_company,
             location=c.profile.location,
+            location_is_company=c.profile.location_is_company,
             linkedin_url=c.profile.linkedin_url,
             dedupe_key=c.profile.dedupe_key,
             phone_e164=c.phone_e164,
@@ -186,6 +187,9 @@ async def run_search(
         total_available=result.total_available,
         notes=result.notes,
         dialable=sum(1 for p in profiles if p.phone_e164),
+        # Counted separately. "10 with a number" beside ten rows all badged
+        # "Demo number" reads as though the vendor supplied them.
+        from_provider=sum(1 for p in profiles if p.resolver == "provider"),
         profiles=profiles,
     )
 

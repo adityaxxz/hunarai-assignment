@@ -81,6 +81,14 @@ export function ResultsTable({
               </TableCell>
               <TableCell className="text-sm text-muted-foreground">
                 {profile.location ?? "—"}
+                {profile.location_is_company && (
+                  <span
+                    className="block text-xs"
+                    title="The plan does not release this person's own location, so this is where their employer is registered."
+                  >
+                    company office, not theirs
+                  </span>
+                )}
               </TableCell>
               <TableCell>
                 <div className="flex flex-col items-start gap-1">
