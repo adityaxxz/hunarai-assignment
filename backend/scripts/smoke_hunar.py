@@ -31,6 +31,10 @@ async def main() -> int:
         return 1
 
     print(f"Base URL: {settings.hunar_base_url}")
+    # Deliberately bypasses get_voice_provider(): the whole point of this script
+    # is to check a live key, so routing it through the demo-mode switch would
+    # let it "pass" against the simulator and prove nothing. This is the only
+    # place outside integrations/hunar/ that names HunarClient.
     client = HunarClient(settings.hunar_api_key, base_url=settings.hunar_base_url)
     try:
         agents = await client.list_agents(page_size=200)
