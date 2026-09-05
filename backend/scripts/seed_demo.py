@@ -38,7 +38,8 @@ import asyncio
 import io
 import json
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
+from zoneinfo import ZoneInfo
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -65,6 +66,22 @@ from app.models import (
 )
 
 NOW = datetime.now(timezone.utc)
+
+DIAL_ZONE = ZoneInfo("Asia/Kolkata")
+
+
+def _in_window(days_ago: int, hour: int, minute: int = 0) -> datetime:
+    """A timestamp inside the calling window the seeded campaigns are launched with.
+
+    Anchored to the window rather than to `NOW - offset`. The seed can be run at
+    any hour, and taking the clock time gave the completed batch a dial time of
+    21:38 against its own 09:00-19:00 guardrail — visible the moment the
+    campaign note started quoting when dialling began.
+    """
+    day = (NOW.astimezone(DIAL_ZONE) - timedelta(days=days_ago)).date()
+    return datetime.combine(day, time(hour, minute), tzinfo=DIAL_ZONE).astimezone(
+        timezone.utc
+    )
 
 # Every number here is inside the 98765-4xxxx block this repository uses for all
 # synthetic data, and no name belongs to a real person. Nothing in this file may
@@ -202,6 +219,17 @@ TECHNICIAN_INFLIGHT: dict[str, str] = {
 
 # Campaign 4, sourcing. Spread wide enough that the insights panel renders real
 # distributions rather than one bar.
+# How many of the fixture pool the seeded reachout consumes.
+#
+# **Deliberately not all of it.** The fixture provider returns a fixed set, and
+# the consent gate excludes anyone who is already a candidate — so importing
+# the whole pool left every later search fully disabled, the gate unrendered and
+# the page ending in silence. A reviewer following the README could not complete
+# the sourcing flow at all. Leaving a few behind keeps the walkthrough runnable,
+# and the ones left behind include the profile with no provider number so both
+# resolver badges appear among the selectable rows.
+SOURCING_IMPORT_LIMIT = 8
+
 SOURCING_RESULTS: list[dict | None] = [
     {"open_to_move": True, "notice_period": "2 months", "expected_ctc": "18 LPA",
      "preferred_callback_time": "after 7pm", "current_ctc": "14 LPA"},
@@ -211,12 +239,9 @@ SOURCING_RESULTS: list[dict | None] = [
      "preferred_callback_time": "after 6pm"},
     {"open_to_move": True, "notice_period": "3 months", "expected_ctc": "26 LPA",
      "preferred_callback_time": "Saturday morning"},
-    {"open_to_move": True, "notice_period": "30 days", "expected_ctc": "19 LPA",
-     "preferred_callback_time": "after 8pm"},
+    {"open_to_move": False, "reason_not_interested": "too far from home"},
+    {"open_to_move": False, "reason_not_interested": "too far from home"},
     {"open_to_move": False, "reason_not_interested": "just got promoted"},
-    {"open_to_move": False, "reason_not_interested": "too far from home"},
-    {"open_to_move": False, "reason_not_interested": "too far from home"},
-    {"open_to_move": False, "reason_not_interested": "counter offer from current employer"},
     None,  # never answered
 ]
 
@@ -257,19 +282,21 @@ async def seed(client: httpx.AsyncClient) -> None:
     await _apply_rider_outcomes(finished)
     await _override(client, finished, "Gauri Patil")
     await _timeline(finished)
-    await _settle(finished, CampaignStatus.COMPLETED, days_ago=6)
+    await _settle(finished, CampaignStatus.COMPLETED, at=_in_window(6, 9, 55))
 
     partial = await _campaign(client, tech_id, "Lab Technician — first attempt")
     await _partial_failure(partial)
-    await _settle(partial, CampaignStatus.PARTIALLY_DISPATCHED, days_ago=2)
+    await _settle(partial, CampaignStatus.PARTIALLY_DISPATCHED, at=_in_window(2, 11, 15))
 
     running = await _campaign(client, tech_id, "Lab Technician — second attempt")
     await _apply_technician_inflight(running)
-    await _settle(running, CampaignStatus.RUNNING, days_ago=0, minutes_ago=4)
+    # Dispatched inside the window as well, so the batch is not shown dialling
+    # before it was sent.
+    await _settle(running, CampaignStatus.RUNNING, at=_in_window(0, 17, 30))
 
     sourcing = await _sourcing(client)
     await _apply_sourcing_results(sourcing)
-    await _settle(sourcing, CampaignStatus.RUNNING, days_ago=1)
+    await _settle(sourcing, CampaignStatus.RUNNING, at=_in_window(1, 14, 5))
 
 
 async def _requisition(client: httpx.AsyncClient, spec: dict, csv: str) -> int:
@@ -328,17 +355,17 @@ async def _calls(session, campaign_id: int) -> dict[str, Call]:
     return {candidate.name: call for call, candidate in rows}
 
 
-def _connected(call: Call, *, seconds: float, engaged: bool) -> None:
+def _connected(call: Call, *, seconds: float, engaged: bool, when: datetime) -> None:
     call.status = "COMPLETED"
     call.lifecycle_status = "COMPLETED"
     call.engagement_status = "ENGAGED" if engaged else "NOT_ENGAGED"
     call.answered_by = "HUMAN"
     call.duration_seconds = seconds
     call.user_speech_duration = round(seconds * 0.28, 2)
-    call.started_at = NOW - timedelta(days=6, minutes=40)
-    call.ended_at = call.started_at + timedelta(seconds=seconds)
+    call.started_at = when
+    call.ended_at = when + timedelta(seconds=seconds)
     call.recording_url = f"https://demo-recordings.invalid/call/recording/{call.hunar_call_id}_0.wav"
-    call.last_reconciled_at = NOW - timedelta(days=6, minutes=30)
+    call.last_reconciled_at = call.ended_at + timedelta(minutes=10)
 
 
 async def _apply_rider_outcomes(campaign_id: int) -> None:
@@ -349,7 +376,7 @@ async def _apply_rider_outcomes(campaign_id: int) -> None:
             if call is None:
                 continue
             if spec["stage"] == "engaged":
-                _connected(call, seconds=42.0, engaged=True)
+                _connected(call, seconds=42.0, engaged=True, when=_in_window(6, 10, 15))
                 call.result = spec["result"]
             elif spec["stage"] == "exhausted":
                 # Terminal, not pending. A finished campaign must not contain a
@@ -359,16 +386,16 @@ async def _apply_rider_outcomes(campaign_id: int) -> None:
                 call.lifecycle_status = "NOT_CONNECTED"
                 call.retry_count = 2
                 call.retries_left = 0
-                call.last_reconciled_at = NOW - timedelta(days=6, minutes=10)
-                call.reconcile_stopped_at = NOW - timedelta(days=6, minutes=10)
+                call.last_reconciled_at = _in_window(6, 10, 40)
+                call.reconcile_stopped_at = _in_window(6, 10, 40)
                 call.reconcile_stopped_reason = "not engaged, no result expected"
             elif spec["stage"] == "machine":
-                _connected(call, seconds=11.0, engaged=False)
+                _connected(call, seconds=11.0, engaged=False, when=_in_window(6, 10, 22))
                 call.answered_by = "MACHINE"
                 call.recording_url = None
                 # Reconciliation gave up rather than waiting forever for a result
                 # that an answering machine is never going to produce.
-                call.reconcile_stopped_at = NOW - timedelta(days=6, minutes=20)
+                call.reconcile_stopped_at = _in_window(6, 10, 35)
                 call.reconcile_stopped_reason = "not engaged, no result expected"
         await session.commit()
 
@@ -383,27 +410,25 @@ async def _apply_technician_inflight(campaign_id: int) -> None:
             if stage == "connected":
                 call.status = "IN_PROGRESS"
                 call.lifecycle_status = "IN_PROGRESS"
-                call.started_at = NOW - timedelta(seconds=25)
+                call.started_at = _in_window(0, 17, 50)
             elif stage == "retrying":
                 call.status = "NOT_CONNECTED"
                 call.lifecycle_status = "IN_PROGRESS"
                 call.retry_count = 1
                 call.retries_left = 1
-                call.next_retry_scheduled_at = NOW + timedelta(minutes=95)
-                call.last_reconciled_at = NOW - timedelta(minutes=2)
+                # The pending retry sits inside the window as well: a next
+                # attempt scheduled for 23:53 is one the guardrails forbid.
+                call.next_retry_scheduled_at = _in_window(0, 18, 45)
+                call.last_reconciled_at = _in_window(0, 17, 55)
             elif stage == "queued":
                 call.status = "SCHEDULED"
                 call.lifecycle_status = "NOT_STARTED"
             elif stage == "engaged_qualified":
-                _connected(call, seconds=58.0, engaged=True)
-                call.started_at = NOW - timedelta(minutes=3)
-                call.ended_at = NOW - timedelta(minutes=2)
+                _connected(call, seconds=58.0, engaged=True, when=_in_window(0, 17, 42))
                 call.result = {"mlt_qualified": True, "lab_years": "6 years",
                                "phlebotomy": True, "night_rotation": True}
             elif stage == "engaged_rejected":
-                _connected(call, seconds=31.0, engaged=True)
-                call.started_at = NOW - timedelta(minutes=4)
-                call.ended_at = NOW - timedelta(minutes=3)
+                _connected(call, seconds=31.0, engaged=True, when=_in_window(0, 17, 38))
                 call.result = {"mlt_qualified": False, "lab_years": "2 years",
                                "phlebotomy": True, "night_rotation": False}
         await session.commit()
@@ -426,7 +451,7 @@ async def _partial_failure(campaign_id: int) -> None:
         for name in ("Nikhil Barve", "Sanya Deshmukh", "Tarun Joshi"):
             call = calls.get(name)
             if call is not None:
-                _connected(call, seconds=36.0, engaged=True)
+                _connected(call, seconds=36.0, engaged=True, when=_in_window(2, 11, 30))
                 call.result = {"mlt_qualified": True, "lab_years": "4 years",
                                "phlebotomy": True, "night_rotation": True}
         await session.commit()
@@ -460,7 +485,7 @@ async def _timeline(campaign_id: int) -> None:
         call = calls.get("Asha Kulkarni")
         if call is None or call.hunar_call_id is None:
             return
-        base = NOW - timedelta(days=6, minutes=39)
+        base = _in_window(6, 10, 15) + timedelta(seconds=42)
         for offset, event_type in (
             (12, "call_status_updated"),
             (23, "call_recording_done"),
@@ -479,16 +504,14 @@ async def _timeline(campaign_id: int) -> None:
         await session.commit()
 
 
-async def _settle(
-    campaign_id: int, status: CampaignStatus, *, days_ago: int, minutes_ago: int = 0
-) -> None:
+async def _settle(campaign_id: int, status: CampaignStatus, *, at: datetime) -> None:
     """Set the final campaign status and backdate it.
 
     Backdating is written directly because `created_at` is a server default;
     without it all four campaigns share one timestamp and the list reads as a
     single click rather than three weeks of work.
     """
-    when = NOW - timedelta(days=days_ago, minutes=minutes_ago)
+    when = at
     async with SessionLocal() as session:
         campaign = await session.get(Campaign, campaign_id)
         campaign.status = status
@@ -507,12 +530,28 @@ async def _sourcing(client: httpx.AsyncClient) -> int:
     search.raise_for_status()
     search_body = search.json()
 
+    # Run a fixed broad query rather than whatever the JD step produced.
+    # `POST /searches` still exercises the real Gemini path and stores its output,
+    # but the *seed* must be deterministic: when Gemini is reachable it writes a
+    # tighter query than the keyword fallback, the fixture provider matches fewer
+    # profiles, and the seeded reachout silently shrinks from eight calls to
+    # three. A demo that changes shape depending on whether a third party is up
+    # is not a demo.
     found = await client.post(
         f"/sourcing/searches/{search_body['id']}/run",
-        json={"query": search_body["query"], "limit": 10},
+        json={
+            "query": {"bool": {"must": [
+                {"match": {"job_title": "engineer"}},
+                {"term": {"location_country": "india"}},
+            ]}},
+            "limit": 10,
+        },
     )
     found.raise_for_status()
-    profiles = [p for p in found.json()["profiles"] if p["phone_e164"]]
+    # Only the profiles the provider itself gave a number for, capped. What is
+    # left behind is the point: see SOURCING_IMPORT_LIMIT.
+    dialable = [p for p in found.json()["profiles"] if p["phone_e164"]]
+    profiles = [p for p in dialable if p["resolver"] == "provider"][:SOURCING_IMPORT_LIMIT]
 
     imported = await client.post(
         f"/sourcing/searches/{search_body['id']}/import",
@@ -535,7 +574,8 @@ async def _sourcing(client: httpx.AsyncClient) -> int:
     created.raise_for_status()
     print(
         f"  sourcing: query from {search_body['query_source']}, "
-        f"{imported.json()['imported']} people imported, "
+        f"{imported.json()['imported']} of {len(dialable)} people imported "
+        f"({len(dialable) - len(profiles)} left for a live walkthrough), "
         f"{created.json()['total_calls']} calls dispatched"
     )
     return created.json()["id"]
@@ -552,11 +592,9 @@ async def _apply_sourcing_results(campaign_id: int) -> None:
             if result is None:
                 call.status = "NOT_CONNECTED"
                 call.lifecycle_status = "NOT_CONNECTED"
-                call.last_reconciled_at = NOW - timedelta(days=1)
+                call.last_reconciled_at = _in_window(1, 14, 40)
                 continue
-            _connected(call, seconds=47.0, engaged=True)
-            call.started_at = NOW - timedelta(days=1, minutes=20)
-            call.ended_at = NOW - timedelta(days=1, minutes=19)
+            _connected(call, seconds=47.0, engaged=True, when=_in_window(1, 14, 20))
             call.result = result
         await session.commit()
 

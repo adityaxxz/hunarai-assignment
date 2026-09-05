@@ -94,6 +94,26 @@ export default function SourcingPage() {
     (p) => p.phone_e164 && !p.do_not_call && !p.already_a_candidate,
   ).length ?? 0;
 
+  // Why nobody can be selected, in the order the consent gate excludes them.
+  // Rendered instead of the gate rather than left blank: a table followed by
+  // nothing reads as a broken page, and the reason is already known here.
+  const exclusions = run
+    ? [
+        {
+          count: run.profiles.filter((p) => p.already_a_candidate).length,
+          reason: "already candidates from an earlier sourcing run",
+        },
+        {
+          count: run.profiles.filter((p) => p.do_not_call).length,
+          reason: "on the do-not-call list",
+        },
+        {
+          count: run.profiles.filter((p) => !p.phone_e164).length,
+          reason: "without a number this plan will release",
+        },
+      ].filter((e) => e.count > 0)
+    : [];
+
   return (
     <PageContainer
       title="Sourcing"
@@ -203,6 +223,24 @@ export default function SourcingPage() {
                   })
                 }
               />
+            </CardContent>
+          </Card>
+        )}
+
+        {run && selectable === 0 && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-sm font-medium">4. Consent</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              <p className="text-sm">
+                None of these {run.profiles.length} profiles can be called:{" "}
+                {exclusions.map((e) => `${e.count} ${e.reason}`).join(", ")}.
+              </p>
+              <p className="text-sm text-muted-foreground">
+                Edit the query above and search again to find people who are not
+                already in the pipeline.
+              </p>
             </CardContent>
           </Card>
         )}
