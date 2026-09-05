@@ -405,3 +405,58 @@ async def test_campaign_detail_reports_the_funnel_and_an_honest_estimate(client)
     assert estimate["worst_case_attempts"] == 3, "1 call plus 2 retries"
     assert "monetary cost" in " ".join(estimate["unknown"]), "must not invent a rate"
     assert any("single call captured" in a for a in estimate["assumptions"])
+
+
+# --- the list --------------------------------------------------------------
+
+
+async def test_the_list_reports_stage_counts_per_campaign(client, session) -> None:
+    """The counts are what make the list usable: without them every card looks
+    the same and a reviewer has to open each one to find the interesting batch."""
+    requisition_id = await setup_requisition(
+        client, candidates=[("Asha", "9876543210", "Bengaluru"),
+                            ("Bilal", "9876543211", "Bengaluru")]
+    )
+    created = await client.post(
+        "/campaigns", json={"requisition_id": requisition_id, "name": "Batch one"}
+    )
+    campaign_id = created.json()["id"]
+    calls = (await session.execute(select(Call).where(Call.campaign_id == campaign_id))).scalars().all()
+    calls[0].status = "COMPLETED"
+    calls[0].lifecycle_status = "COMPLETED"
+    calls[0].engagement_status = "ENGAGED"
+    await session.commit()
+
+    body = (await client.get("/campaigns")).json()
+
+    row = next(c for c in body["results"] if c["id"] == campaign_id)
+    assert body["total"] == 1
+    assert row["name"] == "Batch one"
+    assert row["kind"] == "SCREENING"
+    assert row["requisition_title"] == "Delivery Rider"
+    assert row["total_calls"] == 2
+    assert row["funnel"]["engaged"] == 1
+    assert row["funnel"]["queued"] == 1
+
+
+async def test_the_list_can_be_filtered_to_sourcing(client) -> None:
+    requisition_id = await setup_requisition(
+        client, candidates=[("Asha", "9876543210", "Bengaluru")]
+    )
+    await client.post("/campaigns", json={"requisition_id": requisition_id, "name": "Screening"})
+    await client.post(
+        "/campaigns",
+        json={"requisition_id": requisition_id, "name": "Reachout", "kind": "SOURCING"},
+    )
+
+    sourcing = (await client.get("/campaigns?kind=SOURCING")).json()
+
+    assert sourcing["total"] == 1
+    assert sourcing["results"][0]["name"] == "Reachout"
+
+
+async def test_an_empty_list_is_an_empty_page_not_an_error(client) -> None:
+    body = (await client.get("/campaigns")).json()
+
+    assert body["total"] == 0
+    assert body["results"] == []

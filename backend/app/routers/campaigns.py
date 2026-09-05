@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -23,7 +23,14 @@ from app.models import (
     CandidateStatus,
     Requisition,
 )
-from app.schemas import CallRead, CampaignCreate, CampaignDetail, CampaignPage
+from app.schemas import (
+    CallRead,
+    CampaignCreate,
+    CampaignDetail,
+    CampaignListPage,
+    CampaignPage,
+    CampaignSummary,
+)
 from app.services.campaign import (
     CampaignValidationError,
     estimate,
@@ -239,6 +246,84 @@ async def _dispatch(
     else:
         campaign.status = CampaignStatus.PARTIALLY_DISPATCHED
         campaign.dispatch_error = f"{len(rejected)} of {len(by_phone)} numbers were not accepted"
+
+
+@router.get("", response_model=CampaignListPage)
+async def list_campaigns(
+    kind: str | None = Query(default=None, description="SCREENING or SOURCING"),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    session: AsyncSession = Depends(get_session),
+) -> CampaignListPage:
+    """Every campaign, newest first.
+
+    Deliberately does **not** reconcile. `GET /campaigns/{id}` does, because
+    someone is watching that funnel; doing it here would mean one Hunar round
+    trip per row to render a page whose job is only to let you find a campaign.
+    The counts can be a few seconds stale, and opening a campaign refreshes them.
+    """
+    stmt = select(Campaign)
+    if kind:
+        stmt = stmt.where(Campaign.kind == kind)
+
+    total = (
+        await session.execute(select(func.count()).select_from(stmt.subquery()))
+    ).scalar_one()
+    campaigns = (
+        await session.execute(
+            stmt.order_by(Campaign.id.desc()).offset((page - 1) * page_size).limit(page_size)
+        )
+    ).scalars().all()
+
+    if not campaigns:
+        return CampaignListPage(total=total, page=page, page_size=page_size, results=[])
+
+    ids = [c.id for c in campaigns]
+    # One query for every call on the page, grouped in Python. Not a per-campaign
+    # count query, which is the N+1 this list would otherwise be, and not a SQL
+    # GROUP BY, because the stage is derived from two status fields by
+    # `funnel_stage` rather than stored.
+    calls = (
+        await session.execute(select(Call).where(Call.campaign_id.in_(ids)))
+    ).scalars().all()
+
+    counts: dict[int, dict[str, int]] = {
+        cid: dict.fromkeys(FUNNEL_STAGES, 0) for cid in ids
+    }
+    for call in calls:
+        counts[call.campaign_id][funnel_stage(call)] += 1
+
+    titles = dict(
+        (
+            await session.execute(
+                select(Requisition.id, Requisition.title).where(
+                    Requisition.id.in_([c.requisition_id for c in campaigns if c.requisition_id])
+                )
+            )
+        ).all()
+    )
+
+    return CampaignListPage(
+        total=total,
+        page=page,
+        page_size=page_size,
+        results=[
+            CampaignSummary(
+                id=c.id,
+                name=c.name,
+                kind=c.kind,
+                status=c.status,
+                created_at=c.created_at,
+                dispatched_at=c.dispatched_at,
+                dispatch_error=c.dispatch_error,
+                requisition_id=c.requisition_id,
+                requisition_title=titles.get(c.requisition_id),
+                total_calls=sum(counts[c.id].values()),
+                funnel=counts[c.id],
+            )
+            for c in campaigns
+        ],
+    )
 
 
 @router.get("/{campaign_id}", response_model=CampaignDetail)

@@ -19,6 +19,10 @@
 export interface Health {
   status: string;
   demo_mode: boolean;
+  /** The live provider's own name ("fixture" or "pdl"), not the env var echoed
+   * back. Reported so a deployed link can be confirmed unable to spend PDL
+   * credits without reading the dashboard. */
+  people_search_provider: string;
   version: string;
 }
 
@@ -368,4 +372,25 @@ export interface SourcingInsights {
   notice_period: Record<string, number>;
   objections: Record<string, number>;
   callback_times: string[];
+}
+
+export interface CampaignSummary {
+  id: number;
+  name: string;
+  kind: string;
+  status: string;
+  created_at: string;
+  dispatched_at: string | null;
+  dispatch_error: string | null;
+  requisition_id: number | null;
+  requisition_title: string | null;
+  total_calls: number;
+  funnel: Record<string, number>;
+}
+
+export interface CampaignListPage {
+  total: number;
+  page: number;
+  page_size: number;
+  results: CampaignSummary[];
 }

@@ -16,6 +16,7 @@ import type {
   CallDetail,
   CampaignCreate,
   CampaignDetail,
+  CampaignListPage,
   CampaignPage,
   Candidate,
   CandidatePage,
@@ -352,4 +353,9 @@ export function importSourced(
 
 export function getSourcingInsights(campaignId: number): Promise<SourcingInsights> {
   return apiFetch<SourcingInsights>(`/sourcing/campaigns/${campaignId}/insights`);
+}
+
+/** The campaign list. Does not reconcile server-side, unlike `getCampaign`. */
+export function listCampaigns(): Promise<CampaignListPage> {
+  return apiFetch<CampaignListPage>("/campaigns?page_size=50");
 }

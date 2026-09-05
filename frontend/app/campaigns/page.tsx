@@ -1,64 +1,110 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useQuery } from "@tanstack/react-query";
+import Link from "next/link";
 
 import { PageContainer } from "@/components/page-container";
-import { Button } from "@/components/ui/button";
+import { EmptyState, ErrorState, LoadingState } from "@/components/states";
+import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import { listCampaigns } from "@/lib/api/client";
+import type { CampaignSummary } from "@/lib/api/types";
+import { formatDateTime } from "@/lib/format";
+import { FUNNEL_STAGES, STAGE_LABELS } from "@/lib/vocab";
 
-/**
- * There is no `GET /campaigns`, so this cannot be a list.
- *
- * Rather than fake one from local state — which would show a different set of
- * campaigns per browser and disagree with the database — the page says what is
- * missing and offers the two routes that do work: launch from a requisition, or
- * open a campaign by id.
- */
+/** Statuses that mean something went wrong, so the badge earns its colour. */
+const BAD_STATUS = new Set(["FAILED", "PARTIALLY_DISPATCHED"]);
+
 export default function CampaignsPage() {
-  const [id, setId] = useState("");
-  const router = useRouter();
+  const { data, isPending, isError, error, refetch } = useQuery({
+    queryKey: ["campaigns"],
+    queryFn: listCampaigns,
+  });
 
   return (
     <PageContainer
       title="Campaigns"
-      description="Call batches, the live funnel and per-candidate results."
+      description="Every batch of calls, screening and sourcing, newest first."
     >
-      <Card>
-        <CardContent className="space-y-4 pt-6">
-          <p className="text-sm text-muted-foreground">
-            The backend has no endpoint that lists campaigns, only{" "}
-            <code className="font-mono text-xs">GET /campaigns/&#123;id&#125;</code>. A list
-            built here from browser state would show a different set of campaigns on every
-            machine and disagree with the database, so it is not built.
-          </p>
-          <p className="text-sm text-muted-foreground">
-            Launch a campaign from its requisition, or open one directly:
-          </p>
-          <form
-            className="flex items-end gap-3"
-            onSubmit={(event) => {
-              event.preventDefault();
-              if (id) router.push(`/campaigns/${id}`);
-            }}
-          >
-            <div className="space-y-1.5">
-              <Label className="text-sm">Campaign id</Label>
-              <Input
-                value={id}
-                inputMode="numeric"
-                className="w-32"
-                onChange={(e) => setId(e.target.value.replace(/\D/g, ""))}
-              />
-            </div>
-            <Button type="submit" disabled={!id}>
-              Open
-            </Button>
-          </form>
-        </CardContent>
-      </Card>
+      {isPending && <LoadingState label="Loading campaigns" />}
+      {isError && <ErrorState error={error} onRetry={() => refetch()} />}
+      {data?.total === 0 && (
+        <EmptyState
+          title="No campaigns yet"
+          description="Launch one from a requisition, or run a sourcing search."
+        />
+      )}
+      {data && data.total > 0 && (
+        <div className="space-y-4">
+          {data.results.map((campaign) => (
+            <CampaignCard key={campaign.id} campaign={campaign} />
+          ))}
+        </div>
+      )}
     </PageContainer>
+  );
+}
+
+function CampaignCard({ campaign }: { campaign: CampaignSummary }) {
+  // Sourcing campaigns open on their own page, which adds the interest and
+  // objection aggregates above the same funnel.
+  const href =
+    campaign.kind === "SOURCING"
+      ? `/sourcing/campaigns/${campaign.id}`
+      : `/campaigns/${campaign.id}`;
+
+  const stages = FUNNEL_STAGES.filter((stage) => (campaign.funnel[stage] ?? 0) > 0);
+
+  return (
+    <Card>
+      <CardContent className="pt-6">
+        <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-2">
+          <Link href={href} className="font-medium underline-offset-4 hover:underline">
+            {campaign.name}
+          </Link>
+          <span className="text-xs text-muted-foreground">
+            {formatDateTime(campaign.dispatched_at ?? campaign.created_at)}
+          </span>
+        </div>
+
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <Badge variant={campaign.kind === "SOURCING" ? "outline" : "secondary"}>
+            {campaign.kind === "SOURCING" ? "Sourcing" : "Screening"}
+          </Badge>
+          <Badge variant={BAD_STATUS.has(campaign.status) ? "destructive" : "outline"}>
+            {campaign.status}
+          </Badge>
+          {campaign.requisition_id && (
+            <Link
+              href={`/requisitions/${campaign.requisition_id}`}
+              className="text-xs text-muted-foreground underline underline-offset-4 hover:text-foreground"
+            >
+              {campaign.requisition_title}
+            </Link>
+          )}
+          <span className="text-xs text-muted-foreground">
+            {campaign.total_calls} call{campaign.total_calls === 1 ? "" : "s"}
+          </span>
+        </div>
+
+        {campaign.dispatch_error && (
+          <p className="mt-2 text-sm text-destructive">{campaign.dispatch_error}</p>
+        )}
+
+        {/* Only the stages that have anyone in them. The full eight-column
+            funnel belongs on the campaign itself; here it would be mostly
+            zeroes and would bury the two numbers that differ between rows. */}
+        {stages.length > 0 && (
+          <dl className="mt-3 flex flex-wrap gap-x-5 gap-y-1">
+            {stages.map((stage) => (
+              <div key={stage} className="flex items-baseline gap-1.5">
+                <dt className="text-xs text-muted-foreground">{STAGE_LABELS[stage]}</dt>
+                <dd className="text-sm tabular-nums">{campaign.funnel[stage]}</dd>
+              </div>
+            ))}
+          </dl>
+        )}
+      </CardContent>
+    </Card>
   );
 }

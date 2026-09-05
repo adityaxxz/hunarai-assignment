@@ -50,7 +50,17 @@ app.include_router(sourcing.router)
 # free tier spins the service down after 15 minutes idle with a 30-60s cold start.
 @app.get("/health")
 def health() -> dict[str, str | bool]:
-    # demo_mode is reported by the backend rather than read from a second
+    # Both switches are reported by the backend rather than read from a second
     # NEXT_PUBLIC_ variable in the frontend, so the banner cannot disagree with
-    # which voice provider is actually wired up.
-    return {"status": "ok", "demo_mode": settings.demo_mode, "version": VERSION}
+    # what is actually wired up. `people_search_provider` is the live provider's
+    # own name, not the env var echoed back: it is the only way to confirm from
+    # outside that a deployed link cannot spend People Data Labs credits, and a
+    # setting nobody can verify is a setting nobody should trust.
+    from app.integrations.people_search.provider import get_people_search_provider
+
+    return {
+        "status": "ok",
+        "demo_mode": settings.demo_mode,
+        "people_search_provider": get_people_search_provider().name,
+        "version": VERSION,
+    }

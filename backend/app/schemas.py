@@ -503,3 +503,31 @@ class SourcingInsights(BaseModel):
     notice_period: dict[str, int]
     objections: dict[str, int]
     callback_times: list[str]
+
+
+class CampaignSummary(BaseModel):
+    """One row of the campaign list. Enough for a card, and no more.
+
+    Deliberately not `CampaignDetail`: that one runs reconciliation and computes
+    a dial window and an estimate per campaign, which on a list of twenty would
+    be twenty round trips to Hunar to render a page nobody is watching yet.
+    """
+
+    id: int
+    name: str
+    kind: str
+    status: str
+    created_at: datetime
+    dispatched_at: datetime | None
+    dispatch_error: str | None
+    requisition_id: int | None
+    requisition_title: str | None
+    total_calls: int
+    funnel: dict[str, int]
+
+
+class CampaignListPage(BaseModel):
+    total: int
+    page: int
+    page_size: int
+    results: list[CampaignSummary]
