@@ -102,19 +102,25 @@ class Requisition(Base, TimestampMixin):
     id: Mapped[int] = mapped_column(primary_key=True)
     title: Mapped[str] = mapped_column(String(200))
     location: Mapped[str] = mapped_column(String(200))
-    languages: Mapped[list[str]] = mapped_column(JSONColumn)
+    # Singular: a Hunar agent speaks exactly one language, so a requisition
+    # needing two needs two agents. Storing a list here would imply otherwise.
+    language: Mapped[str] = mapped_column(String(32), default="ENGLISH")
+    voice_persona: Mapped[str] = mapped_column(String(32), default="NEHA")
     shift: Mapped[str | None] = mapped_column(String(120))
     pay_min: Mapped[int | None]
     pay_max: Mapped[int | None]
     openings: Mapped[int] = mapped_column(default=1)
 
-    # Knockout questions and the weighted rubric are stored as the JSON the UI
-    # edits. Rejected normalising them into criterion rows: they are only ever
-    # read as a whole, to build the agent's result_schema and to score a result.
-    knockout_questions: Mapped[list[dict[str, Any]]] = mapped_column(
-        JSONColumn, default=list
-    )
-    rubric: Mapped[list[dict[str, Any]]] = mapped_column(JSONColumn, default=list)
+    # THE source of truth for screening. One list drives three things that must
+    # never disagree: the questions the agent asks, the result_schema Hunar
+    # extracts against, and the rubric that decides qualification. Stored as the
+    # JSON the UI edits rather than normalised into rows, because it is only ever
+    # read as a whole. See services/agent_builder.py.
+    criteria: Mapped[list[dict[str, Any]]] = mapped_column(JSONColumn, default=list)
+    # Per-candidate values the prompt personalises on. Each one must appear as a
+    # {token} in the prompt or Hunar will not create the custom variable, and
+    # task 9's CSV mapping must supply every one of them.
+    candidate_variables: Mapped[list[str]] = mapped_column(JSONColumn, default=list)
 
 
 class AgentVersion(Base, TimestampMixin):
@@ -144,6 +150,15 @@ class AgentVersion(Base, TimestampMixin):
     # Null until the config is pushed to Hunar, so an edited-but-unpushed draft
     # is a first-class state rather than something we have to infer.
     hunar_agent_id: Mapped[str | None] = mapped_column(String(64), unique=True)
+
+    # What Hunar COMPUTED, read back after creation — never what we sent. The
+    # live capture showed custom_variables came back empty for an agent whose
+    # introduction contained {callee_name}, because callee_name is always a
+    # required variable and never becomes a custom one. Storing our assumption
+    # would have recorded a contract that does not exist.
+    custom_variables: Mapped[list[str]] = mapped_column(JSONColumn, default=list)
+    required_variables: Mapped[list[str]] = mapped_column(JSONColumn, default=list)
+    result_variables: Mapped[list[str]] = mapped_column(JSONColumn, default=list)
 
 
 class Candidate(Base, TimestampMixin):

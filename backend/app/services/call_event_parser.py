@@ -1,20 +1,38 @@
 """Turn a raw webhook body into a `CallUpdate`.
 
-=============================================================================
-UNVERIFIED AGAINST LIVE PAYLOADS. Corrected in task 6b.
+Verified against real captured deliveries. See `fixtures/observed_shapes.md` for
+the full record; the short version is below, because the shape of the input is
+the entire reason this file exists.
 
-Every field name and every assumption about nesting below is read off Hunar's
-published call-detail example, not off a webhook we have actually received. The
-capture in task 3.5 has not run yet.
+**All four event types were captured**, across two real calls — one unanswered,
+one answered by a human and engaged:
 
-This is the ONLY file that should need to change when the fixtures land. If
-task 6b ends up editing anything else, the seam was drawn in the wrong place.
-=============================================================================
+| Event | Carries |
+| --- | --- |
+| `call_status_updated` | the full status block: `status`, `lifecycle_status`, `answered_by`, `retry_count`, `retries_left`, `started_at`, `ended_at`, durations |
+| `call_summary` | the same block, plus `result` and `recording_url` |
+| `call_recording_done` | **five fields only**: `agent_id`, `call_id`, `event_type`, `request_id`, `recording_url` |
+| `call_result_done` | **five fields only**: `agent_id`, `call_id`, `event_type`, `request_id`, `result` |
 
-Defensive throughout: this is fed bytes from the public internet that have
-passed an HMAC check and nothing else. It returns None rather than raising, and
-the caller records that as an errored event instead of letting one unreadable
-body wedge the pipeline.
+Two consequences that shape the code below.
+
+**The recording and result events say nothing about where the call is.** No
+`status`, no `lifecycle_status`, no `retry_count`. The state machine has to cope
+with an update that only carries one fact, which is why `should_apply` reads a
+missing `retry_count` as the value already on the record rather than as attempt
+zero, and why `result` and `recording_url` are applied ahead of the staleness gate.
+
+**Four fields never appear in any webhook**, confirmed on a connected and engaged
+call so it is not an artefact of the unanswered one: `engagement_status`,
+`call_ended_by`, `redial_status` and `user_speech_duration`. The call detail API
+returns all four. Reading them here would be reading keys that are always absent,
+so this parser does not try — they reach the record only through reconciliation
+polling the API. `CallUpdate` still declares them for exactly that path.
+
+Defensive throughout: this is fed bytes from the public internet that have passed
+an HMAC check and nothing else. It returns None rather than raising, and the
+caller records that as an errored event instead of letting one unreadable body
+wedge the pipeline.
 """
 
 import json
@@ -26,12 +44,16 @@ from app.services.call_state import CallUpdate
 
 logger = logging.getLogger(__name__)
 
-# The webhook may deliver the call object at the top level or wrapped. Tried in
-# order; the first one that is an object with an id wins.
-_ENVELOPE_KEYS = ("data", "call", "payload", "result")
-
-# Best guess, in preference order, at where the call id lives.
-_ID_KEYS = ("call_id", "id", "hunar_call_id")
+# Webhook bodies are flat objects with the id at the top level. There is no
+# envelope: an earlier version of this file tried `data`, `call`, `payload` and
+# `result` as possible wrappers, which was guesswork, and `result` is a real key
+# on a `call_result_done` body — so that fallback could have picked the result
+# object up as the call object and parsed nonsense out of it.
+#
+# `call_id` is the only id key. The call detail API uses `id` instead, which is
+# why a webhook body must never be parsed with the `Call` model: that model
+# requires `id` and correctly rejects every webhook we captured.
+_ID_KEY = "call_id"
 
 
 def parse_event(event_type: str, raw_body: str) -> CallUpdate | None:
@@ -43,59 +65,40 @@ def parse_event(event_type: str, raw_body: str) -> CallUpdate | None:
     if not isinstance(payload, dict):
         return None
 
-    call = _locate_call_object(payload)
-    if call is None:
-        return None
-
-    call_id = _first_string(call, _ID_KEYS) or _first_string(payload, _ID_KEYS)
+    call_id = _string(payload, _ID_KEY)
     if not call_id:
         return None
 
     try:
         return CallUpdate(
             hunar_call_id=call_id,
-            status=_string(call, "status"),
-            lifecycle_status=_string(call, "lifecycle_status"),
-            engagement_status=_string(call, "engagement_status"),
-            answered_by=_string(call, "answered_by"),
-            call_ended_by=_string(call, "call_ended_by"),
-            redial_status=_string(call, "redial_status"),
-            # Response-side name. The request sends retry_config.max_retry_count
-            # and the response returns max_retries; retry_count is the separate
-            # "attempts so far" counter and is the one the state machine orders on.
-            retry_count=_int(call, "retry_count"),
-            retries_left=_int(call, "retries_left"),
-            next_retry_scheduled_at=_datetime(call, "next_retry_scheduled_at"),
-            recording_url=_string(call, "recording_url"),
-            result=_dict(call, "result"),
-            duration_seconds=_float(call, "duration_seconds"),
-            user_speech_duration=_float(call, "user_speech_duration"),
-            started_at=_datetime(call, "started_at"),
-            ended_at=_datetime(call, "ended_at"),
+            # Absent on the recording and result events; None there is correct.
+            status=_string(payload, "status"),
+            lifecycle_status=_string(payload, "lifecycle_status"),
+            answered_by=_string(payload, "answered_by"),
+            # The response-side name is `max_retries`; `retry_count` is the
+            # separate "attempts so far" counter and the one the state machine
+            # orders on.
+            retry_count=_int(payload, "retry_count"),
+            retries_left=_int(payload, "retries_left"),
+            next_retry_scheduled_at=_datetime(payload, "next_retry_scheduled_at"),
+            recording_url=_string(payload, "recording_url"),
+            # Observed as `{}` rather than null when the call produced nothing.
+            # That is why `apply_call_update` tests truthiness and not `is not
+            # None`: the real sequence is call_result_done delivering a result,
+            # then a reconcile poll returning `{}`, which an `is not None` test
+            # would write straight over the top of it.
+            result=_dict(payload, "result"),
+            # duration_minutes is deliberately not read. It is duration_seconds
+            # divided by 60 — the same fact twice, and two things to keep in
+            # agreement for no gain.
+            duration_seconds=_float(payload, "duration_seconds"),
+            started_at=_datetime(payload, "started_at"),
+            ended_at=_datetime(payload, "ended_at"),
         )
     except Exception:  # pragma: no cover - belt and braces around a public input
         logger.exception("unexpected failure parsing %s event", event_type)
         return None
-
-
-def _locate_call_object(payload: dict[str, Any]) -> dict[str, Any] | None:
-    if any(isinstance(payload.get(key), str) and payload[key] for key in _ID_KEYS):
-        return payload
-    for key in _ENVELOPE_KEYS:
-        nested = payload.get(key)
-        if isinstance(nested, dict) and any(
-            isinstance(nested.get(id_key), str) and nested[id_key] for id_key in _ID_KEYS
-        ):
-            return nested
-    return None
-
-
-def _first_string(source: dict[str, Any], keys: tuple[str, ...]) -> str | None:
-    for key in keys:
-        value = source.get(key)
-        if isinstance(value, str) and value:
-            return value
-    return None
 
 
 def _string(source: dict[str, Any], key: str) -> str | None:
@@ -128,8 +131,8 @@ def _datetime(source: dict[str, Any], key: str) -> datetime | None:
     if not isinstance(value, str) or not value:
         return None
     try:
-        # Hunar sends "2025-09-23T12:20:16.503Z"; fromisoformat handles the Z
-        # suffix from 3.11 onward.
+        # Observed format: "2026-09-05T03:23:34.710184Z" and "...T03:24:34Z".
+        # fromisoformat handles the Z suffix from 3.11 onward.
         return datetime.fromisoformat(value)
     except ValueError:
         return None

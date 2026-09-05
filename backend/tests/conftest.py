@@ -50,6 +50,30 @@ async def session_factory():
 
 
 @pytest.fixture(autouse=True)
+def _never_call_hunar_for_real(monkeypatch):
+    """Pin the VoiceProvider singleton to a simulator for every test.
+
+    DEMO_MODE is false in this suite so the webhook tests exercise the live
+    signing path, but that same flag drives `get_voice_provider()` — which means
+    any router calling it would build a real HunarClient and put actual requests
+    on the wire against api.voice.hunar.ai. Caught exactly that way: a test
+    failed with "[401] Invalid API key", which is a response from Hunar.
+    """
+    import app.integrations.hunar.provider as provider_module
+    from app.integrations.hunar.simulator import HunarSimulator
+
+    async def no_deliver(event_type: str, body: dict) -> None:
+        """Deliveries are exercised deliberately in test_simulator, not as a side
+        effect of every other test."""
+
+    monkeypatch.setattr(
+        provider_module,
+        "_provider",
+        HunarSimulator(time_scale=0.01, deliver=no_deliver),
+    )
+
+
+@pytest.fixture(autouse=True)
 async def _background_tasks_use_test_db(session_factory, monkeypatch):
     """`process_call_event` runs as a background task after the response, so it
     opens its own session rather than borrowing the request's. Without this it
