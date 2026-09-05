@@ -62,6 +62,9 @@ class CampaignStatus(StrEnum):
     DRAFT = "DRAFT"
     DISPATCHING = "DISPATCHING"
     RUNNING = "RUNNING"
+    # Hunar accepted some rows and not others. A campaign that claims to be
+    # running when half its calls never left is worse than one that says so.
+    PARTIALLY_DISPATCHED = "PARTIALLY_DISPATCHED"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
 
@@ -77,6 +80,15 @@ class InterviewStatus(StrEnum):
     RESCHEDULED = "RESCHEDULED"
     ATTENDED = "ATTENDED"
     NO_SHOW = "NO_SHOW"
+
+
+class CandidateStatus(StrEnum):
+    """Intake status only. The screening outcome lives on `calls`, because a
+    candidate can be called more than once and the verdict belongs to an attempt,
+    not to the person."""
+
+    NEW = "NEW"
+    DO_NOT_CALL = "DO_NOT_CALL"
 
 
 class MessageChannel(StrEnum):
@@ -175,6 +187,9 @@ class Candidate(Base, TimestampMixin):
     name: Mapped[str] = mapped_column(String(200))
     phone_e164: Mapped[str] = mapped_column(String(20))
     source: Mapped[CandidateSource] = mapped_column(_enum(CandidateSource))
+    status: Mapped[CandidateStatus] = mapped_column(
+        _enum(CandidateStatus), default=CandidateStatus.NEW
+    )
     # Which resolver produced the number, so the UI can badge it. Null for
     # inbound candidates, who supplied their own.
     phone_source: Mapped[str | None] = mapped_column(String(32))
@@ -227,6 +242,10 @@ class Campaign(Base, TimestampMixin):
     status: Mapped[CampaignStatus] = mapped_column(
         _enum(CampaignStatus), default=CampaignStatus.DRAFT
     )
+    dispatched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Why the batch failed as a whole, when it did. Per-call reasons live on the
+    # call rows, because a partial failure has both.
+    dispatch_error: Mapped[str | None] = mapped_column(Text)
 
     calls: Mapped[list["Call"]] = relationship(back_populates="campaign")
 
@@ -240,6 +259,9 @@ class Call(Base, TimestampMixin):
     campaign_id: Mapped[int] = mapped_column(ForeignKey("campaigns.id"), index=True)
     candidate_id: Mapped[int] = mapped_column(ForeignKey("candidates.id"), index=True)
     hunar_call_id: Mapped[str | None] = mapped_column(String(64), unique=True)
+    # Set when this specific row never made it to Hunar. Null and no
+    # hunar_call_id means still in flight; non-null means we know it failed.
+    dispatch_error: Mapped[str | None] = mapped_column(Text)
 
     # Two separate status fields on purpose. `status` is the current attempt,
     # `lifecycle_status` is the overall state across retries. A call that is

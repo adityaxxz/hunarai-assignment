@@ -9,7 +9,9 @@ dependencies = [
     "fastapi>=0.115",
     "httpx>=0.28.1",
     "pydantic-settings>=2.15.0",
+    "python-multipart>=0.0.32",
     "sqlalchemy[asyncio]>=2.0",
+    "tzdata>=2026.3",
     "uvicorn[standard]>=0.32",
 ]
 

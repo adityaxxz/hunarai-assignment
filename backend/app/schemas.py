@@ -128,3 +128,54 @@ class EvaluationRead(BaseModel):
     decision: str
     score: float
     reasons: list[CriterionOutcomeRead]
+
+
+class MappingProposal(BaseModel):
+    """The upload step's answer. Nothing has been written yet."""
+
+    headers: list[str]
+    row_count: int
+    # null means "we could not tell": the recruiter has to say which column it is.
+    mapping: dict[str, str | None]
+    required_variables: list[str]
+    preview: list[dict[str, str]]
+
+
+class CandidateManualCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=200)
+    phone: str = Field(min_length=5, max_length=25)
+    custom_fields: dict[str, str] = Field(default_factory=dict)
+
+
+class CandidateRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    requisition_id: int | None
+    name: str
+    phone_e164: str
+    source: str
+    status: str
+    custom_fields: dict[str, Any]
+
+
+class CandidatePage(BaseModel):
+    total: int
+    page: int
+    page_size: int
+    results: list[CandidateRead]
+
+
+class PreflightReport(BaseModel):
+    """What would happen if a campaign launched now, stated pessimistically."""
+
+    candidates: int
+    dialable: int
+    excluded: list[dict[str, Any]]
+    agent_version_id: int | None
+    hunar_agent_id: str | None
+    required_variables: list[str]
+    ready: bool
+    blockers: list[str]

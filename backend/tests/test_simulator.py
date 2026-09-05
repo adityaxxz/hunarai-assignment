@@ -15,6 +15,7 @@ import json
 import pytest
 
 from app.config import settings
+from app.integrations.hunar.client import LIVE_CLIENT_OPT_IN, LiveClientBlockedError
 from app.integrations.hunar.provider import VoiceProvider
 from app.integrations.hunar.signature import verify_signature
 from app.integrations.hunar.simulator import HunarSimulator, outcome_for
@@ -61,9 +62,19 @@ class Collector:
         self.events.append((event_type, body))
 
 
-async def run_call(sim: HunarSimulator, *, retries: int = 0) -> tuple[str, str]:
-    """Place one call and wait for the whole simulated timeline. Returns
-    (call_id, agent_id)."""
+TERMINAL = {"COMPLETED", "NOT_CONNECTED", "FAILED", "CANCELLED"}
+
+
+async def run_call(
+    sim: HunarSimulator, *, retries: int = 0, collector: "Collector | None" = None
+) -> tuple[str, str]:
+    """Place one call and wait for the timeline to finish. Returns (call_id, agent_id).
+
+    Waits on a condition rather than a fixed sleep. With retries enabled the
+    worst case is 26 time units to the final terminal plus 12 for the summary,
+    which a fixed budget only just covered — and did not cover once the rest of
+    the suite was competing for the event loop.
+    """
     agent = await sim.create_agent(make_agent_payload())
     call = await sim.create_call(
         CallCreate(
@@ -76,8 +87,26 @@ async def run_call(sim: HunarSimulator, *, retries: int = 0) -> tuple[str, str]:
             else None,
         )
     )
-    # Long enough to cover progression + the summary at +12s, scaled.
-    await asyncio.sleep(40 * SCALE)
+
+    # Wait for terminal, then for deliveries to go quiet. Not "until the summary
+    # arrives": the simulator randomises whether the summary leads or trails,
+    # because both orders were observed in production, so the summary landing
+    # first says nothing about the other three having been sent.
+    loop = asyncio.get_event_loop()
+    deadline = loop.time() + 10.0  # real seconds, far beyond the scaled timeline
+    quiet_polls, last_count = 0, -1
+    while loop.time() < deadline:
+        await asyncio.sleep(SCALE)
+        current = await sim.get_call(call.id)
+        if current.lifecycle_status not in TERMINAL:
+            continue
+        if collector is None:
+            break
+        count = len(collector.events)
+        quiet_polls = quiet_polls + 1 if count == last_count else 0
+        last_count = count
+        if count and quiet_polls >= 30:
+            break
     return call.id, agent.id
 
 
@@ -87,7 +116,7 @@ async def find_call_with(sim_factory, predicate, limit: int = 40) -> tuple:
     for _ in range(limit):
         collector = Collector()
         sim = sim_factory(collector)
-        call_id, agent_id = await run_call(sim, retries=2)
+        call_id, agent_id = await run_call(sim, retries=2, collector=collector)
         call = await sim.get_call(call_id)
         if predicate(call, collector):
             return sim, collector, call_id, agent_id
@@ -118,7 +147,33 @@ async def test_factory_switches_on_demo_mode(monkeypatch) -> None:
     monkeypatch.setattr(settings, "demo_mode", False)
     monkeypatch.setattr(settings, "hunar_api_key", "a-key")
     reset_voice_provider()
+
+    # Constructing a real client under pytest is blocked at __init__, so this is
+    # the one place that opts in. It only builds the object; the socket guard
+    # still stops it reaching anything, and nothing here makes a request.
+    monkeypatch.setenv(LIVE_CLIENT_OPT_IN, "1")
     assert isinstance(get_voice_provider(), HunarClient)
+    reset_voice_provider()
+
+
+async def test_a_real_client_cannot_be_built_in_a_test_by_accident(monkeypatch) -> None:
+    """The guard that exists because task 8's tests reached the live API.
+
+    At construction rather than behind a fixture: a fixture is something the next
+    test can forget to apply, and the cost of forgetting is money spent and
+    writes to a shared production org.
+    """
+    from app.integrations.hunar.provider import get_voice_provider, reset_voice_provider
+
+    monkeypatch.setattr(settings, "demo_mode", False)
+    monkeypatch.setattr(settings, "hunar_api_key", "a-key")
+    monkeypatch.delenv(LIVE_CLIENT_OPT_IN, raising=False)
+    reset_voice_provider()
+
+    with pytest.raises(LiveClientBlockedError) as exc:
+        get_voice_provider()
+
+    assert LIVE_CLIENT_OPT_IN in str(exc.value), "the error must name the opt-in var"
     reset_voice_provider()
 
 
