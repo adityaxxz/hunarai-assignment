@@ -1,19 +1,10 @@
 # Hunar.AI — Forward Deployed Engineer assignment
 
-The brief asked for three things: an AI hiring assistant for inbound applicants, a
-people-search and reachout tool for outbound candidates, and a written design for
-tracking attendance without smartphones.
+The brief asked for three things: an AI hiring assistant for inbound applicants, a people-search and reachout tool for outbound candidates, and a written design for tracking attendance without smartphones.
 
-I built the first two as **one application with two entry points into one funnel**,
-and wrote the third as a document. Inbound and outbound only differ in how a
-candidate enters the system. After that it is the same agent builder, the same
-dispatch, the same webhooks, the same reconciliation and the same review screen —
-so building them separately would have meant maintaining two call pipelines to
-demonstrate one.
+I built the first two as **one application with two entry points into one funnel**, and wrote the third as a document. Inbound and outbound only differ in how a candidate enters the system. After that it is the same agent builder, the same dispatch, the same webhooks, the same reconciliation and the same review screen — so building them separately would have meant maintaining two call pipelines to demonstrate one.
 
-Everything below has been run against the real Hunar API, not just against my own
-mocks. Where the API behaved differently from its documentation, I wrote down what
-it actually did and built to that.
+Everything below has been run against the real Hunar API, not just against my own mocks. Where the API behaved differently from its documentation, I wrote down what it actually did and built to that.
 
 ## Links
 
@@ -23,8 +14,6 @@ it actually did and built to that.
 | **Attendance design (item 3)** | https://hunarai-assignment.vercel.app/attendance |
 | **API docs** | https://hunar-fde-backend.onrender.com/docs |
 
-The first page load takes 30 to 60 seconds — Render's free tier sleeps after 15
-minutes idle. The UI tells you that instead of showing a silent spinner.
 
 ## A 90-second walkthrough
 
@@ -71,44 +60,21 @@ waiting on its next retry is shown as retrying with the time, not as failed.
 
 ### 1. I called myself through the deployed system
 
-On 6 September I created a Delivery Rider requisition, put my own number in it, and
-launched it — Vercel to Render to Hunar and back. I answered, spoke in full
-sentences, and let the agent end the call. 40 seconds, 11.4 of them me talking.
+On 6 September I created a Delivery Rider requisition, put my own number in it, and launched it — Vercel to Render to Hunar and back. I answered, spoke in full sentences, and let the agent end the call. 40 seconds, 11.4 of them me talking.
 
-Three things that had never been exercised before all worked on the first attempt:
-**all four webhooks reached Render** (previously I had only ever received them
-through a tunnel to my laptop), the **recording proxy streamed a real 1.2 MB file
-from S3**, and `call_summary` arrived at **+371 seconds** — against the +372s I had
-measured the day before on completely different infrastructure. One second apart.
-That is the single strongest piece of evidence here that the reconciliation design
-is answering a real property of the API and not a fluke.
+Three things that had never been exercised before all worked on the first attempt: **all four webhooks reached Render** (previously I had only ever received them through a tunnel to my laptop), the **recording proxy streamed a real 1.2 MB file from S3**, and `call_summary` arrived at **+371 seconds** — against the +372s I had measured the day before on completely different infrastructure. One second apart. That is the single strongest piece of evidence here that the reconciliation design is answering a real property of the API and not a fluke.
 
-It also found a bug, which is the entire reason to test against reality. Every
-criterion came back `unknown` and I scored UNDECIDED despite answering everything
-correctly. `result_schema` declared those fields `"boolean"` and Hunar returned the
-**quoted string** `"true"`. My earlier capture had returned real JSON booleans and I
-had written that down as settled — one sample was not enough. `_as_bool` now accepts
-both shapes and nothing else, and `observed_shapes.md` records which call disproved
-which.
+It also found a bug, which is the entire reason to test against reality. Every criterion came back `unknown` and I scored UNDECIDED despite answering everything correctly. `result_schema` declared those fields `"boolean"` and Hunar returned the **quoted string** `"true"`. My earlier capture had returned real JSON booleans and I had written that down as settled — one sample was not enough. `_as_bool` now accepts both shapes and nothing else, and `observed_shapes.md` records which call disproved which.
 
 ### 2. I ran a real People Data Labs search
 
-I pointed the deployed app at live PDL with demo mode left **on**, so real profiles
-came back and nothing could dial. It returned real engineers at Larsen & Toubro,
-Thermax and Stantec — and **PDL released not a single phone number**, so all eight
-records fell back to a demo number and every row is badged as such.
+I pointed the deployed app at live PDL with demo mode left **on**, so real profiles came back and nothing could dial. It returned real engineers at Larsen & Toubro, Thermax and Stantec — and **PDL released not a single phone number**, so all eight records fell back to a demo number and every row is badged as such.
 
-That is exactly why contact resolution is its own pipeline stage instead of a field
-read. One result was located in Broomfield, Colorado on an India-filtered search;
-the plan gates the person's own location, so that is their employer's head office,
-and the row says "company office, not theirs" rather than passing it off as where
-they are.
+That is exactly why contact resolution is its own pipeline stage instead of a field read. One result was located in Broomfield, Colorado on an India-filtered search; the plan gates the person's own location, so that is their employer's head office, and the row says "company office, not theirs" rather than passing it off as where they are.
 
 ### The measurement everything else rests on
 
-Before either of those, I placed two calls on 5 September and captured every
-webhook. Full findings in `backend/fixtures/observed_shapes.md`. This is the timing
-that changed the architecture, measured from `ended_at`:
+Before either of those, I placed two calls on 5 September and captured every webhook. Full findings in `backend/fixtures/observed_shapes.md`. This is the timing that changed the architecture, measured from `ended_at`:
 
 | Offset | Event | Carries |
 | --- | --- | --- |
@@ -117,17 +83,11 @@ that changed the architecture, measured from `ended_at`:
 | +27s | `call_result_done` | `result` |
 | **+372s** | `call_summary` | status, result and recording, all populated |
 
-All six webhooks passed signature verification with no code changes. Two
-undocumented behaviours here are load-bearing: `call_summary` trails the call by
-**six minutes** because it waits for Hunar's maker-checker second pass, and the API
-returns `result: {}` at the moment a call reaches COMPLETED. Terminal is not
-finished, so the system keeps reconciling after a call ends — and says so on screen.
+All six webhooks passed signature verification with no code changes. Two undocumented behaviours here are load-bearing: `call_summary` trails the call by **six minutes** because it waits for Hunar's maker-checker second pass, and the API returns `result: {}` at the moment a call reaches COMPLETED. Terminal is not finished, so the system keeps reconciling after a call ends — and says so on screen.
 
 ## How it works
 
-The browser never talks to Hunar. Everything goes browser → my API → Hunar. That
-keeps the key off the client, lets me validate every response against shapes I
-control, and is what makes the recording proxy possible.
+The browser never talks to Hunar. Everything goes browser → my API → Hunar. That keeps the key off the client, lets me validate every response against shapes I control, and is what makes the recording proxy possible.
 
 - **Frontend** — Next.js App Router on Vercel, TypeScript strict, Tailwind, shadcn/ui
 - **Backend** — FastAPI on Render, SQLAlchemy 2 async, Alembic, uv
@@ -135,15 +95,53 @@ control, and is what makes the recording proxy possible.
 - **Scheduling** — cron-job.org: a keep-warm ping every 10 minutes, reconciliation every minute
 
 **The one non-obvious decision: reconciliation drives the funnel, not webhooks.**
-That is a measurement, not a preference. One of my captured calls moved through five
-statuses in about ninety seconds and delivered **exactly one** `call_status_updated`,
-at the terminal transition — nothing for `SCHEDULED → INITIATED`, `INITIATED →
-RINGING` or `RINGING → IN_PROGRESS`. The other behaved the same way with the catcher
-running throughout. A webhook-driven funnel would sit completely still until each
-call ended. So `services/reconcile.py` polls `GET /calls/{id}/` for anything not yet
-terminal, and the campaign endpoint reconciles before it responds — which is why
-watching the page is what makes it move. Webhooks still carry the result payload and
-the recording URL, but they repair the record rather than drive it.
+That is a measurement, not a preference. One of my captured calls moved through five statuses in about ninety seconds and delivered **exactly one** `call_status_updated`, at the terminal transition — nothing for `SCHEDULED → INITIATED`, `INITIATED → RINGING` or `RINGING → IN_PROGRESS`. The other behaved the same way with the catcher running throughout. A webhook-driven funnel would sit completely still until each call ended. So `services/reconcile.py` polls `GET /calls/{id}/` for anything not yet terminal, and the campaign endpoint reconciles before it responds — which is why watching the page is what makes it move. Webhooks still carry the result payload and the recording URL, but they repair the record rather than drive it.
+
+## Key decisions
+
+The reasoning for each of these is argued in full somewhere above; this is just the scannable version.
+
+| Decision | Why |
+| --- | --- |
+| One app, two entry points, one funnel | Inbound and outbound only differ in how a candidate enters. Separating them would mean two call pipelines to demonstrate one. |
+| Reconciliation drives the funnel, not webhooks | Measured: a call delivered exactly one `call_status_updated`, at the terminal transition only. A webhook-driven funnel would sit still until each call ended. |
+| `DEMO_MODE` swaps only the `VoiceProvider` | Everything else — webhooks, signatures, dispatch, reconciliation — runs the same code path whether or not a real call is placed. |
+| Contact resolution is its own pipeline stage | PDL can silently withhold a number. A badge naming which resolver produced it beats hiding the failure. |
+| Recordings are proxied, never linked | Hunar returns a raw S3 URL. Putting that in a page makes a recording of someone's phone call permanently reachable by anyone who reads the HTML. |
+| The computed decision is never overwritten | An override is stored beside it, not instead of it, so what the machine concluded stays visible after a human disagrees. |
+| One list of criteria generates the prompt, `result_schema`, and the rubric | One source means they cannot drift apart from each other. |
+| No user identity invented | Overrides are attributed to the constant `"recruiter"` rather than a fabricated user id. An honest gap is better than a fake one. |
+
+## Project structure
+
+```
+backend/
+  app/
+    routers/          one file per resource — campaigns, requisitions, candidates, calls, sourcing, webhooks, internal
+    services/         the actual logic — agent_builder, campaign (guardrails + dial-window notes), evaluation,
+                       reconcile, recording, contact_resolution, jd_to_query, candidate_intake
+    integrations/
+      hunar/           the Hunar client, webhook signature verification, and the DEMO_MODE simulator
+      people_search/   fixture and PDL providers behind one interface
+    models.py, schemas.py, config.py, db.py, main.py
+  alembic/             migrations
+  fixtures/            observed_shapes.md (what the live API actually does) + captured raw payloads
+  scripts/             seed_demo.py, capture_live_call.py, webhook_catcher.py, smoke_hunar.py
+  tests/
+
+frontend/
+  app/
+    page.tsx                                                     landing
+    requisitions/, requisitions/[id]/, requisitions/[id]/launch/  build an agent, launch a campaign
+    campaigns/, campaigns/[id]/, campaigns/[id]/calls/[callId]/    the funnel and one candidate's detail
+    sourcing/, sourcing/campaigns/[id]/                            JD → query → search → consent → reachout
+    attendance/                                                    renders docs/ATTENDANCE_DESIGN.md at build time
+  components/, lib/
+
+docs/
+  ATTENDANCE_DESIGN.md   item 3, the design document itself
+  screenshots/
+```
 
 ## Running it locally
 
