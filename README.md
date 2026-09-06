@@ -1,13 +1,19 @@
 # Hunar.AI — Forward Deployed Engineer assignment
 
-Three things were asked for: an AI hiring assistant for inbound applicants, a
+The brief asked for three things: an AI hiring assistant for inbound applicants, a
 people-search and reachout tool for outbound candidates, and a written design for
-tracking attendance without smartphones. I built the first two as **one
-application with two entry points into one funnel**, and wrote the third as a
-document. Inbound and outbound differ only in how a candidate enters the system;
-after that it is the same agent builder, dispatch, webhooks, reconciliation and
-review screen. Building them separately would have meant maintaining two call
-pipelines to demonstrate one.
+tracking attendance without smartphones.
+
+I built the first two as **one application with two entry points into one funnel**,
+and wrote the third as a document. Inbound and outbound only differ in how a
+candidate enters the system. After that it is the same agent builder, the same
+dispatch, the same webhooks, the same reconciliation and the same review screen —
+so building them separately would have meant maintaining two call pipelines to
+demonstrate one.
+
+Everything below has been run against the real Hunar API, not just against my own
+mocks. Where the API behaved differently from its documentation, I wrote down what
+it actually did and built to that.
 
 ## Links
 
@@ -15,38 +21,94 @@ pipelines to demonstrate one.
 | --- | --- |
 | **App** | https://hunarai-assignment.vercel.app |
 | **Attendance design (item 3)** | https://hunarai-assignment.vercel.app/attendance |
-| **API** | https://hunar-fde-backend.onrender.com/docs |
+| **API docs** | https://hunar-fde-backend.onrender.com/docs |
 
-The first load takes 30 to 60 seconds: Render's free tier sleeps after 15 minutes
-idle. The UI says so rather than showing a silent spinner.
+The first page load takes 30 to 60 seconds — Render's free tier sleeps after 15
+minutes idle. The UI tells you that instead of showing a silent spinner.
+
+## A 90-second walkthrough
+
+If you only click five things, click these.
+
+1. **[The campaign list](https://hunarai-assignment.vercel.app/campaigns)** — four
+   seeded batches plus my two live tests. Each card shows where its calls actually are.
+2. **[A finished screening batch](https://hunarai-assignment.vercel.app/campaigns/41)** —
+   the funnel, with a call that never connected sitting apart from calls that did.
+3. **[One candidate](https://hunarai-assignment.vercel.app/campaigns/41/calls/220)** —
+   the rubric question by question, and a recruiter override sitting *beside* the
+   decision the system computed rather than replacing it.
+4. **[My real call](https://hunarai-assignment.vercel.app/campaigns/45/calls/240)** —
+   I rang myself through the deployed stack. Real recording, real webhook timeline.
+5. **[Sourcing](https://hunarai-assignment.vercel.app/sourcing)** — paste a job
+   description, edit the query the model wrote, search, and see the consent gate.
+
+Two more worth a look: the
+**[agent panel](https://hunarai-assignment.vercel.app/requisitions/26)**, which shows
+what Hunar *derived* next to what I *sent*, and a
+**[reachout batch](https://hunarai-assignment.vercel.app/campaigns/44)** with the
+interest and objection aggregates.
 
 ## Screenshots
 
-**The agent panel.** One list of criteria generates the prompt, the
-`result_schema` and the rubric, so they cannot drift apart. After creation it
-shows the variables Hunar *derived* beside the tokens we *sent* — the vendor
-computes `custom_variables` from the prompt text, and a disagreement is a 422 at
-dispatch.
+**The agent panel.** One list of criteria generates the prompt, the `result_schema`
+and the rubric, so they cannot drift apart. After I create the agent, the panel
+shows the variables Hunar derived beside the tokens I sent — Hunar computes
+`custom_variables` by scanning the prompt text, and any disagreement is a 422 at
+dispatch time.
 
 ![Agent panel](docs/screenshots/agent-panel.jpg)
 
-**The live funnel.** Eight stages derived from Hunar's two status fields. A call
-between retry attempts is shown as retrying with its next attempt time, not as
-failed.
+**The live funnel.** Eight stages, derived from Hunar's two status fields. A call
+waiting on its next retry is shown as retrying with the time, not as failed.
 
 ![Live funnel](docs/screenshots/live-funnel.jpg)
 
-**Candidate detail.** The rubric criterion by criterion: what was asked, what was
-said, whether it passed. A recruiter override sits beside the computed decision
-rather than replacing it.
+**Candidate detail.** What was asked, what the candidate said, whether it passed.
 
 ![Candidate detail](docs/screenshots/candidate-detail.jpg)
 
-## Live call evidence
+## The two live tests
 
-Two real calls were placed against the Hunar API on 5 September 2026 and every
-webhook captured; full findings in `backend/fixtures/observed_shapes.md`. Run 2
-was answered by a human, ENGAGED, 30 seconds. Measured from `ended_at`:
+### 1. I called myself through the deployed system
+
+On 6 September I created a Delivery Rider requisition, put my own number in it, and
+launched it — Vercel to Render to Hunar and back. I answered, spoke in full
+sentences, and let the agent end the call. 40 seconds, 11.4 of them me talking.
+
+Three things that had never been exercised before all worked on the first attempt:
+**all four webhooks reached Render** (previously I had only ever received them
+through a tunnel to my laptop), the **recording proxy streamed a real 1.2 MB file
+from S3**, and `call_summary` arrived at **+371 seconds** — against the +372s I had
+measured the day before on completely different infrastructure. One second apart.
+That is the single strongest piece of evidence here that the reconciliation design
+is answering a real property of the API and not a fluke.
+
+It also found a bug, which is the entire reason to test against reality. Every
+criterion came back `unknown` and I scored UNDECIDED despite answering everything
+correctly. `result_schema` declared those fields `"boolean"` and Hunar returned the
+**quoted string** `"true"`. My earlier capture had returned real JSON booleans and I
+had written that down as settled — one sample was not enough. `_as_bool` now accepts
+both shapes and nothing else, and `observed_shapes.md` records which call disproved
+which.
+
+### 2. I ran a real People Data Labs search
+
+I pointed the deployed app at live PDL with demo mode left **on**, so real profiles
+came back and nothing could dial. It returned real engineers at Larsen & Toubro,
+Thermax and Stantec — and **PDL released not a single phone number**, so all eight
+records fell back to a demo number and every row is badged as such.
+
+That is exactly why contact resolution is its own pipeline stage instead of a field
+read. One result was located in Broomfield, Colorado on an India-filtered search;
+the plan gates the person's own location, so that is their employer's head office,
+and the row says "company office, not theirs" rather than passing it off as where
+they are.
+
+### The measurement everything else rests on
+
+Before either of those, I placed two calls on 5 September and captured every
+webhook. Full findings in `backend/fixtures/observed_shapes.md`. This is the timing
+that changed the architecture, measured from `ended_at`:
 
 | Offset | Event | Carries |
 | --- | --- | --- |
@@ -55,55 +117,33 @@ was answered by a human, ENGAGED, 30 seconds. Measured from `ended_at`:
 | +27s | `call_result_done` | `result` |
 | **+372s** | `call_summary` | status, result and recording, all populated |
 
-All six captured webhooks pass signature verification unchanged. Two undocumented
-behaviours here are load-bearing: `call_summary` trails the call by **six
-minutes** because it waits for the maker-checker second pass, and the API returns
-`result: {}` at the moment of COMPLETED. Terminal is not finished, so the system
-keeps reconciling after a call ends and says so on screen.
+All six webhooks passed signature verification with no code changes. Two
+undocumented behaviours here are load-bearing: `call_summary` trails the call by
+**six minutes** because it waits for Hunar's maker-checker second pass, and the API
+returns `result: {}` at the moment a call reaches COMPLETED. Terminal is not
+finished, so the system keeps reconciling after a call ends — and says so on screen.
 
-### A third call, through the deployed stack
+## How it works
 
-On 6 September a screening call was placed end to end through the deployed
-system — Vercel to Render to Hunar and back — rather than through a tunnel to a
-laptop. It answered, ran 40 seconds, and returned a full structured result.
-
-Three things that had never been exercised before all worked: **webhooks reached
-Render** (all four events, processed and linked), the **recording proxy served a
-real 1.2 MB S3 file**, and `call_summary` arrived at **+371s** against the +372s
-measured a day earlier on different infrastructure. One second apart, which is
-the strongest evidence here that the reconciliation design is answering a real
-property of the API rather than a one-off.
-
-It also found a bug, which is the point of testing against reality. Every
-criterion came back `unknown` and the candidate scored UNDECIDED despite
-answering correctly: `result_schema` declared the fields `"boolean"` and Hunar
-returned the **quoted string** `"true"`. The 5 September capture had returned
-real JSON booleans and `observed_shapes.md` recorded that as settled — one
-sample was not enough. `evaluation._as_bool` now accepts both shapes and nothing
-else, and that file records which call disproved which.
-
-## Architecture
-
-The browser never talks to Hunar. Everything goes browser to our API to Hunar,
-which is what keeps the key off the client, lets every response be validated
-against shapes we control, and makes the recording proxy possible.
+The browser never talks to Hunar. Everything goes browser → my API → Hunar. That
+keeps the key off the client, lets me validate every response against shapes I
+control, and is what makes the recording proxy possible.
 
 - **Frontend** — Next.js App Router on Vercel, TypeScript strict, Tailwind, shadcn/ui
 - **Backend** — FastAPI on Render, SQLAlchemy 2 async, Alembic, uv
 - **Database** — Neon serverless Postgres, Singapore
 - **Scheduling** — cron-job.org: a keep-warm ping every 10 minutes, reconciliation every minute
 
-**The non-obvious decision: reconciliation is the primary source of funnel state,
-not webhooks.** That is a measurement, not a preference. Run 2 moved through five
-statuses in about ninety seconds and delivered **exactly one**
-`call_status_updated`, at the terminal transition — nothing for
-`SCHEDULED → INITIATED`, `INITIATED → RINGING`, or `RINGING → IN_PROGRESS`. Run 1
-behaved identically with the catcher running throughout, so a webhook-driven
-funnel would sit still until each call ended. `services/reconcile.py` polls
-`GET /calls/{id}/` for anything not terminal and the campaign endpoint reconciles
-before responding, which is why polling the page is what makes it move. Webhooks
-still carry the result payload and the recording URL, but they repair the record
-rather than drive it.
+**The one non-obvious decision: reconciliation drives the funnel, not webhooks.**
+That is a measurement, not a preference. One of my captured calls moved through five
+statuses in about ninety seconds and delivered **exactly one** `call_status_updated`,
+at the terminal transition — nothing for `SCHEDULED → INITIATED`, `INITIATED →
+RINGING` or `RINGING → IN_PROGRESS`. The other behaved the same way with the catcher
+running throughout. A webhook-driven funnel would sit completely still until each
+call ended. So `services/reconcile.py` polls `GET /calls/{id}/` for anything not yet
+terminal, and the campaign endpoint reconciles before it responds — which is why
+watching the page is what makes it move. Webhooks still carry the result payload and
+the recording URL, but they repair the record rather than drive it.
 
 ## Running it locally
 
@@ -112,7 +152,7 @@ cd backend
 cp .env.example .env          # fill in DATABASE_URL at minimum
 uv sync
 uv run alembic upgrade head
-uv run python scripts/seed_demo.py     # optional, wipes and seeds the demo
+uv run python scripts/seed_demo.py     # optional: wipes and seeds the demo story
 uv run uvicorn app.main:app --reload
 
 cd ../frontend
@@ -129,87 +169,85 @@ npm install && npm run dev
 | `DEMO_WEBHOOK_SIGNING_KEY` | no | Generated per process. Set it to survive restarts. |
 | `INTERNAL_API_TOKEN` | for cron | Bearer token for `/internal/*`. |
 | `PEOPLE_SEARCH_PROVIDER` | no | `fixture` or `pdl`. Defaults to `fixture`. |
-| `PDL_API_KEY` | for live search | Free tier is 100 records a month, and each result spends one. |
-| `GEMINI_API_KEY` | no | Job-description parsing falls back to keyword extraction without it. |
+| `PDL_API_KEY` | for live search | Free tier is 100 records a month; each result spends one. |
+| `GEMINI_API_KEY` | no | JD parsing falls back to keyword extraction without it. |
 | `NEXT_PUBLIC_API_BASE_URL` | **yes** (frontend) | The only public variable. No secret ever belongs in one. |
 
-`GET /health` reports `demo_mode` and the live people-search provider, so what is
-actually wired up can be checked from outside rather than taken on trust.
+`GET /health` reports `demo_mode` and the live people-search provider, so you can
+check what is actually wired up from outside instead of taking my word for it.
 
 ## Demo mode
 
-The Hunar trial key expires three days after issue, and you cannot dial real
-people to demonstrate a voice product in a review meeting. So `DEMO_MODE` swaps
-the `VoiceProvider` implementation and nothing else.
+The Hunar trial key expires three days after issue, and you cannot dial real people
+to demonstrate a voice product in a review meeting. So `DEMO_MODE` swaps the
+`VoiceProvider` implementation and nothing else.
 
-The simulator is not canned responses. It **signs real webhooks with HMAC-SHA256
-and POSTs them over HTTP to our own receiver**, which verifies them through the
-same path a live Hunar callback takes. Timings are compressed from those measured
-above, with the real values in the comments. The deployed instance ships in demo
-mode with `PEOPLE_SEARCH_PROVIDER=fixture`, so nobody clicking around the live
-link can place a call or spend a search credit. `DEMO_MODE=false` with a valid key
-makes it dial.
+The simulator is not a set of canned responses. It **signs real webhooks with
+HMAC-SHA256 and POSTs them over HTTP to my own receiver**, which verifies them
+through the same path a live Hunar callback takes. The timings are compressed from
+the ones I measured, with the real values in the comments. The deployed instance
+runs in demo mode, so nothing you click can place a call. Setting `DEMO_MODE=false`
+with a valid key makes it dial for real — that is how I ran the live test.
 
-## Known constraints
+## What does not work, and why
 
-**PDL's free tier withholds phone numbers**, substituting the literal boolean
-`true` for a gated field rather than null: `mobile_phone: true` means "we have
-one, your plan does not include it". Contact resolution is therefore its own
-pipeline stage that may fail, and every record carries a badge naming which
-resolver produced its number. Hiding that would make the demo a lie that only
-breaks in production.
+**PDL's free tier withholds phone numbers.** It also substitutes the literal boolean
+`true` for a gated field rather than null, so `mobile_phone: true` means "we have
+one, your plan does not include it". Contact resolution is therefore a pipeline
+stage that is allowed to fail, and every record carries a badge naming which
+resolver produced its number. Hiding that would make the demo a lie that only breaks
+in production.
 
-**No WhatsApp transport is wired.** The `NotificationChannel` interface exists
-with a logged implementation; the Twilio adapter is not. A live integration is
-invisible to a reviewer anyway — Twilio's sandbox needs each recipient to send a
-join code, Meta's test number allows five — so a rendered outbox showing
-template, recipient, trigger and timestamp is the better artifact.
-
-**A dispatched call cannot be recalled.** The API offers no cancel or delete for
-a scheduled call, and a campaign launched outside the calling window is *accepted
-and scheduled*, not rejected. Mitigated by validating the window before dispatch
-— it is 08:00 to 21:00, both bounds found by hitting them — and by stating the
-real dial start time on the confirmation. But once Hunar accepts a call, it will
+**A dispatched call cannot be recalled.** Hunar offers no cancel or delete for a
+scheduled call, and a campaign launched outside the calling window is *accepted and
+scheduled*, not rejected. I mitigate it by validating the window before dispatch —
+08:00 to 21:00, both bounds discovered by hitting them — and by stating the real
+dial start time on the confirmation screen. But once Hunar accepts a call, it will
 place it.
 
-**Demo numbers are synthetic in intent but real in format.** The fixture
-profiles carry numbers in a live Indian mobile range, and nothing in the code
-stops one reaching a real dialler: `PEOPLE_SEARCH_PROVIDER=fixture` reads as safe
-while `DEMO_MODE=false` is the switch that actually matters. That combination
-scheduled a call to a number belonging to a stranger, and — per the constraint
-above — it could not be recalled. A dispatch-time guard refusing fixture data in
-live mode is the obvious fix and is not built.
+**My demo numbers are synthetic in intent and real in format.** The fixture profiles
+carry numbers in a live Indian mobile range, and nothing in the code stops one
+reaching a real dialler. `PEOPLE_SEARCH_PROVIDER=fixture` reads as safe while
+`DEMO_MODE=false` is the switch that actually matters, and that combination once
+scheduled a call I could not cancel. A dispatch-time guard refusing fixture data in
+live mode is the obvious fix and I have not built it.
 
 **No authentication.** Recruiter overrides are attributed to the constant
-`"recruiter"` in `audit_log` rather than to a fabricated user id. Identity is the
-largest gap between this and something shippable.
+`"recruiter"` in `audit_log` rather than to a user id I would have had to invent.
+Identity is the largest single gap between this and something shippable.
+
+**No WhatsApp transport.** The `NotificationChannel` interface exists with a logged
+implementation; the Twilio adapter does not. A live integration is invisible to a
+reviewer anyway — Twilio's sandbox needs each recipient to send a join code and
+Meta's test number allows five — so a rendered outbox showing template, recipient,
+trigger and timestamp is the better artifact.
 
 **Frontend types are hand-maintained**, not generated from the OpenAPI schema. A
-generated client is a large file nobody reviews plus a regeneration step that
-goes stale silently. The trade is stated in the file: a backend field rename
-typechecks, builds, and is `undefined` at runtime.
+generated client is a large file nobody reviews plus a regeneration step that goes
+stale silently. The cost is real and I state it in the file: rename a backend field
+and the frontend still typechecks, still builds, and is `undefined` at runtime.
 
-**The recording proxy does not support Range requests**, so seeking within a long
-recording will not work. Recordings are proxied rather than linked because Hunar
-returns a raw S3 URL, and putting that in a page makes a recording of someone's
-phone call permanently reachable by anyone who reads the HTML.
+**The recording proxy has no Range support**, so you cannot seek within a long
+recording. I proxy recordings rather than link them because Hunar returns a raw S3
+URL, and putting that in a page makes a recording of someone's phone call
+permanently reachable by anyone who reads the HTML.
 
-**Data retention.** Nothing expires: recordings, extracted results and phone
-numbers persist until the database is dropped. A real deployment needs a
-retention policy and a deletion path before it touches anyone's data; the seed
-script's wipe is a development convenience, not one.
+**Nothing expires.** Recordings, extracted results and phone numbers persist until
+the database is dropped. A real deployment needs a retention policy and a deletion
+path before it touches anyone's data; the seed script's wipe is a development
+convenience, not one.
 
 ## What I would do next
 
-- **Authentication and real actor identity**, so `audit_log` records who
-  overrode a decision instead of that someone did.
-- **Range support on the recording proxy**, so a recruiter can skip to the part
-  of a two-minute call they care about instead of listening from the start.
-- **`reconcile_stopped_reason` surfaced in the funnel**, not only on the
-  candidate detail. The call list already distinguishes "still settling" from
-  "we gave up"; the stage counters do not.
-- **A scheduled-call cancel path** the moment Hunar exposes one, and until then a
-  pre-dispatch confirmation that names every number about to be called.
-- **Interview slot booking and the messaging outbox.** Both are modelled in the
-  schema, neither is built — the first things cut once the live capture showed
-  reconciliation needed more work than planned.
+- **Authentication and real actor identity**, so `audit_log` records *who* overrode
+  a decision instead of merely that someone did.
+- **Range support on the recording proxy**, so a recruiter can skip to the part of a
+  two-minute call they care about.
+- **A dispatch guard** that refuses fixture data in live mode, and a pre-dispatch
+  confirmation naming every number about to be called.
+- **`reconcile_stopped_reason` in the funnel**, not only on the candidate detail.
+  The call list already separates "still settling" from "we gave up"; the stage
+  counters do not.
+- **Interview booking and the messaging outbox.** Both are modelled in the schema
+  and neither is built — they were the first things I cut once the live capture
+  showed reconciliation needed more work than I had planned for.
