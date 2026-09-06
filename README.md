@@ -61,7 +61,26 @@ minutes** because it waits for the maker-checker second pass, and the API return
 `result: {}` at the moment of COMPLETED. Terminal is not finished, so the system
 keeps reconciling after a call ends and says so on screen.
 
-<!-- Live-call screenshots to be added here once supplied. -->
+### A third call, through the deployed stack
+
+On 6 September a screening call was placed end to end through the deployed
+system — Vercel to Render to Hunar and back — rather than through a tunnel to a
+laptop. It answered, ran 40 seconds, and returned a full structured result.
+
+Three things that had never been exercised before all worked: **webhooks reached
+Render** (all four events, processed and linked), the **recording proxy served a
+real 1.2 MB S3 file**, and `call_summary` arrived at **+371s** against the +372s
+measured a day earlier on different infrastructure. One second apart, which is
+the strongest evidence here that the reconciliation design is answering a real
+property of the API rather than a one-off.
+
+It also found a bug, which is the point of testing against reality. Every
+criterion came back `unknown` and the candidate scored UNDECIDED despite
+answering correctly: `result_schema` declared the fields `"boolean"` and Hunar
+returned the **quoted string** `"true"`. The 5 September capture had returned
+real JSON booleans and `observed_shapes.md` recorded that as settled — one
+sample was not enough. `evaluation._as_bool` now accepts both shapes and nothing
+else, and that file records which call disproved which.
 
 ## Architecture
 
@@ -152,6 +171,14 @@ and scheduled*, not rejected. Mitigated by validating the window before dispatch
 — it is 08:00 to 21:00, both bounds found by hitting them — and by stating the
 real dial start time on the confirmation. But once Hunar accepts a call, it will
 place it.
+
+**Demo numbers are synthetic in intent but real in format.** The fixture
+profiles carry numbers in a live Indian mobile range, and nothing in the code
+stops one reaching a real dialler: `PEOPLE_SEARCH_PROVIDER=fixture` reads as safe
+while `DEMO_MODE=false` is the switch that actually matters. That combination
+scheduled a call to a number belonging to a stranger, and — per the constraint
+above — it could not be recalled. A dispatch-time guard refusing fixture data in
+live mode is the obvious fix and is not built.
 
 **No authentication.** Recruiter overrides are attributed to the constant
 `"recruiter"` in `audit_log` rather than to a fabricated user id. Identity is the
