@@ -328,3 +328,61 @@ async def test_a_missing_call_is_404_everywhere(client) -> None:
             json={"decision": "QUALIFIED", "reason_code": "AGENT_MISHEARD"},
         )
     ).status_code == 404
+
+
+# --- what Hunar actually sends for a boolean -------------------------------
+
+
+async def test_a_boolean_returned_as_a_quoted_string_is_still_scored(client, session) -> None:
+    """The exact payload from live call 5ba9fa5a on 6 September 2026.
+
+    `result_schema` declared these `"boolean"` and Hunar answered with the
+    strings `"true"`. The development capture had returned real JSON booleans and
+    observed_shapes.md recorded that as settled; one sample was not enough. The
+    cost of believing it: every boolean scored unknown, so a candidate who
+    answered every question correctly came out UNDECIDED with a score of zero.
+    """
+    call_id = await setup_call(
+        client,
+        session,
+        result={"has_licence": "true", "own_bike": "true", "shift_ok": "false"},
+    )
+
+    body = (await client.get(f"/calls/{call_id}")).json()
+
+    reasons = {r["key"]: r for r in body["evaluation"]["reasons"]}
+    assert body["evaluation"]["decision"] == "QUALIFIED"
+    assert reasons["has_licence"]["status"] == "pass"
+    # Normalised to a real boolean, so the screen shows `true` not `'true'`.
+    assert reasons["has_licence"]["value"] is True
+    assert reasons["shift_ok"]["status"] == "fail"
+    assert reasons["shift_ok"]["value"] is False
+
+
+async def test_a_string_that_is_not_true_or_false_stays_unknown(client, session) -> None:
+    """The coercion is narrow on purpose. "yes" is unambiguous to a human and
+    guesswork to a scorer, and a wrong value is worse than a missing one."""
+    call_id = await setup_call(
+        client,
+        session,
+        result={"has_licence": "yes", "own_bike": "one week", "shift_ok": 1},
+    )
+
+    body = (await client.get(f"/calls/{call_id}")).json()
+
+    reasons = {r["key"]: r for r in body["evaluation"]["reasons"]}
+    assert body["evaluation"]["decision"] == "UNDECIDED"
+    assert all(r["status"] == "unknown" for r in reasons.values())
+    assert "got 'yes'" in reasons["has_licence"]["reason"]
+
+
+async def test_case_and_whitespace_around_the_token_are_tolerated(client, session) -> None:
+    call_id = await setup_call(
+        client, session, result={"has_licence": " TRUE ", "own_bike": "False"}
+    )
+
+    body = (await client.get(f"/calls/{call_id}")).json()
+
+    reasons = {r["key"]: r for r in body["evaluation"]["reasons"]}
+    assert reasons["has_licence"]["status"] == "pass"
+    assert reasons["own_bike"]["status"] == "fail"

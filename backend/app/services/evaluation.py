@@ -70,6 +70,29 @@ def evaluate(result: dict[str, Any] | None, requisition: Any) -> Evaluation:
     return Evaluation(decision=decision, score=_score(outcomes), reasons=outcomes)
 
 
+def _as_bool(value: Any) -> bool | None:
+    """A real boolean, or the quoted tokens Hunar sometimes sends instead.
+
+    Observed on a live screening call: fields declared `"boolean"` in
+    `result_schema` came back as the strings `"true"` and `"false"`. The single
+    call captured during development returned real JSON booleans, and
+    `fixtures/observed_shapes.md` recorded that as settled — **one sample was not
+    enough**, and the cost was every boolean criterion scoring as unknown, which
+    made every candidate UNDECIDED however they answered.
+
+    Deliberately narrow: only the two tokens the result_prompt asks for, differing
+    from the documented shape by type alone. "yes", "1" and "Y" are rejected. We
+    have never seen Hunar send them, and inventing a vocabulary here is exactly
+    how a wrong answer gets scored as a right one — the failure this module was
+    written to avoid.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str) and value.strip().lower() in ("true", "false"):
+        return value.strip().lower() == "true"
+    return None
+
+
 def _assess(criterion: Criterion, values: dict[str, Any]) -> CriterionOutcome:
     present = criterion.key in values and values[criterion.key] is not None
     value = values.get(criterion.key)
@@ -81,11 +104,14 @@ def _assess(criterion: Criterion, values: dict[str, Any]) -> CriterionOutcome:
         return _outcome(criterion, value, "unknown", "not answered on the call")
 
     if criterion.type == "boolean":
-        if not isinstance(value, bool):
+        answer = _as_bool(value)
+        if answer is None:
             return _outcome(criterion, value, "unknown", f"expected true or false, got {value!r}")
-        if value == criterion.expected:
-            return _outcome(criterion, value, "pass", f"answered {value}")
-        return _outcome(criterion, value, "fail", f"answered {value}, needed {criterion.expected}")
+        # The coerced boolean, not the raw string, so the screen shows `true`
+        # rather than `'true'` and the two shapes are indistinguishable downstream.
+        if answer == criterion.expected:
+            return _outcome(criterion, answer, "pass", f"answered {answer}")
+        return _outcome(criterion, answer, "fail", f"answered {answer}, needed {criterion.expected}")
 
     text = str(value).strip()
     if not text:

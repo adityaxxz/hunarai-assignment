@@ -170,10 +170,28 @@ rather than putting that URL in the browser.
 }
 ```
 
-The result keys are exactly the keys of the `result_schema` we sent, with the
-declared types honoured: `"boolean"` produced real JSON booleans, `"string"`
-produced a string. This is the maker-checker output, and it is structured — there
-is no free text to parse anywhere in it.
+The result keys are exactly the keys of the `result_schema` we sent. This is the
+maker-checker output, and it is structured — there is no free text to parse
+anywhere in it.
+
+**The declared type is NOT reliably honoured, and this file said otherwise until
+a second live call disproved it.** On the 5 September capture a `"boolean"` field
+came back as a real JSON boolean, and that was recorded here as settled. On a
+live screening call on 6 September (`5ba9fa5a`) the same declaration came back as
+the quoted string `"true"`:
+
+```json
+{"own_two_wheeler": "true", "vaild_driving_license": "true",
+ "what_notice_period": "one week", "available_morning_shift": "true"}
+```
+
+Every boolean criterion scored `unknown`, so a candidate who answered all four
+questions correctly came out UNDECIDED with a score of zero. `evaluation._as_bool`
+now accepts the quoted tokens as well as real booleans, and nothing else.
+
+The lesson generalises past this field: **n=1 is not an observation, it is an
+anecdote.** Everything else in this document rests on two calls; this section
+rested on one, and it was the one thing here that turned out to be wrong.
 
 **These two events carry no status and no `retry_count`.** The state machine
 already handles that correctly: `should_apply` reads a missing `retry_count` as
