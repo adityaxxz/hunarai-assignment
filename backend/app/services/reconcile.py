@@ -169,7 +169,17 @@ async def reconcile_incomplete_calls(
         Call.hunar_call_id.is_not(None),
         Call.lifecycle_status.in_(TERMINAL_LIFECYCLE),
         Call.reconcile_stopped_at.is_(None),
-        or_(Call.result.is_(None), Call.recording_url.is_(None)),
+        # engagement_status belongs here as much as the other two: it is
+        # API-only, it never arrives on a webhook, and reconciliation is the only
+        # thing that fetches it. Leaving it out meant a call whose result and
+        # recording both arrived by webhook was never re-read, so engagement
+        # stayed null forever and the funnel showed Completed where it should
+        # have shown Engaged. Observed on the first real screening call.
+        or_(
+            Call.result.is_(None),
+            Call.recording_url.is_(None),
+            Call.engagement_status.is_(None),
+        ),
         # Outcomes that cannot produce a result are excluded at the query rather
         # than polled until they time out.
         Call.lifecycle_status.not_in(CANNOT_PRODUCE_RESULT),
@@ -186,7 +196,7 @@ async def reconcile_incomplete_calls(
             continue
 
         if _past_deadline(call, now):
-            _stop(call, now, "result did not arrive within 10 minutes of ending")
+            _stop(call, now, _still_missing(call))
             report.gave_up += 1
             continue
 
@@ -379,6 +389,25 @@ def _due_for_poll(call: Call, now: datetime) -> bool:
             interval = gap
             break
     return now - _as_utc(call.last_reconciled_at) >= interval
+
+
+def _still_missing(call: Call) -> str:
+    """Name what never arrived, rather than always blaming the result.
+
+    Now that engagement is chased too, a call can time out with its result
+    already in hand — and "result did not arrive" would then be the screen
+    stating something the record contradicts.
+    """
+    missing = [
+        name
+        for name, value in (
+            ("the result", call.result),
+            ("the recording", call.recording_url),
+            ("the engagement status", call.engagement_status),
+        )
+        if not value
+    ]
+    return f"{' and '.join(missing)} did not arrive within 10 minutes of ending"
 
 
 def _stop(call: Call, now: datetime, reason: str) -> None:

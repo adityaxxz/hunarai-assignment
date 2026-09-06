@@ -78,10 +78,12 @@ async def get_recording(call_id: int, session: AsyncSession = Depends(get_sessio
             detail="No recording for this call yet. It may still be uploading, or the call may never have connected.",
         )
 
+    meta: dict[str, str] = {}
     try:
         # Consumed once here so an upstream failure becomes a clean error
-        # response, instead of a 200 whose body dies halfway through.
-        stream = stream_recording(call.recording_url)
+        # response, instead of a 200 whose body dies halfway through. It also
+        # means `meta` is populated by the time the headers are built.
+        stream = stream_recording(call.recording_url, meta)
         first = await anext(stream, b"")
     except RecordingUnavailable as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
@@ -91,11 +93,13 @@ async def get_recording(call_id: int, session: AsyncSession = Depends(get_sessio
         async for chunk in stream:
             yield chunk
 
-    return StreamingResponse(
-        body(),
-        media_type="audio/wav",
-        headers={"X-Recording-Source": "hunar"},
-    )
+    headers = {"X-Recording-Source": "hunar"}
+    # Passed through so the response is not chunked. A browser given a chunked
+    # audio stream reports `duration: Infinity` and disables seeking entirely.
+    if "content-length" in meta:
+        headers["Content-Length"] = meta["content-length"]
+
+    return StreamingResponse(body(), media_type="audio/wav", headers=headers)
 
 
 @router.post("/{call_id}/override", response_model=CallDetail)

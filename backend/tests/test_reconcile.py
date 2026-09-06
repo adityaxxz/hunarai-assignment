@@ -300,3 +300,37 @@ async def test_health_ping_needs_no_auth_and_no_database(client) -> None:
 
     assert response.status_code == 200
     assert response.json() == {"status": "awake"}
+
+
+async def test_a_terminal_call_missing_only_engagement_is_still_re_read(session) -> None:
+    """Observed on the first real screening call.
+
+    The result and the recording both arrived by webhook, so the backfill query —
+    which only looked for a missing result or recording — never selected the row
+    again. `engagement_status` is API-only and never arrives on a webhook, so it
+    stayed null forever and the funnel showed Completed where it should have
+    shown Engaged.
+    """
+    import asyncio
+
+    sim = HunarSimulator(time_scale=SCALE, deliver=no_deliver)
+    campaign, candidate = await seed_campaign(session)
+    call = await place(sim, session, campaign, candidate)
+
+    await asyncio.sleep(20 * SCALE)  # past the consistency delay
+    # Exactly the state a webhook-fed call ends up in: everything a webhook can
+    # carry is present, and only the API-only field is missing.
+    call.status = "COMPLETED"
+    call.lifecycle_status = "COMPLETED"
+    call.result = {"has_licence": True}
+    call.recording_url = "https://example.invalid/r.wav"
+    call.engagement_status = None
+    call.ended_at = datetime.now(timezone.utc) - timedelta(seconds=30)
+    call.last_reconciled_at = datetime.now(timezone.utc) - timedelta(minutes=5)
+    await session.commit()
+
+    report = await reconcile_incomplete_calls(session, campaign.id, provider=sim)
+
+    await session.refresh(call)
+    assert report.examined == 1, "the row was never selected for a re-read"
+    assert call.engagement_status is not None

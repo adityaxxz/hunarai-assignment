@@ -386,3 +386,38 @@ async def test_case_and_whitespace_around_the_token_are_tolerated(client, sessio
     reasons = {r["key"]: r for r in body["evaluation"]["reasons"]}
     assert reasons["has_licence"]["status"] == "pass"
     assert reasons["own_bike"]["status"] == "fail"
+
+
+async def test_the_proxy_passes_the_upstream_content_length_through(
+    client, session, monkeypatch
+) -> None:
+    """Without it Starlette chunks the body, the browser cannot compute a
+    duration, and the player renders as 0:00 with a dead scrub bar. Seen on the
+    first real recording this proxy ever served."""
+    import httpx as _httpx
+
+    from app.config import settings
+    from app.services import recording as recording_module
+
+    monkeypatch.setattr(settings, "demo_mode", False)
+    call_id = await setup_call(client, session, result={"has_licence": True})
+    call = await session.get(Call, call_id)
+    call.recording_url = "https://example.invalid/real.wav"
+    await session.commit()
+
+    audio = b"RIFF" + b"\x00" * 2048
+
+    async def fake_stream(url, meta=None):
+        if meta is not None:
+            meta["content-length"] = str(len(audio))
+        yield audio
+
+    monkeypatch.setattr(recording_module, "stream_recording", fake_stream)
+    monkeypatch.setattr("app.routers.calls.stream_recording", fake_stream)
+
+    response = await client.get(f"/calls/{call_id}/recording")
+
+    assert response.status_code == 200
+    assert response.headers["content-length"] == str(len(audio))
+    assert "chunked" not in response.headers.get("transfer-encoding", "")
+    assert response.content == audio

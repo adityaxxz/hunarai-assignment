@@ -60,12 +60,18 @@ def silent_wav(seconds: int = DEMO_SECONDS, sample_rate: int = DEMO_SAMPLE_RATE)
     return header + b"\x00" * data_bytes
 
 
-async def stream_recording(url: str):
+async def stream_recording(url: str, meta: dict[str, str] | None = None):
     """Yield the upstream recording in chunks.
 
     Streamed rather than loaded whole: the worker holds one chunk at a time
     instead of an entire multi-megabyte file, which matters on a 512MB free-tier
     instance serving one process.
+
+    `meta` is filled with the upstream `content-length` before the first chunk is
+    yielded, so the caller can pass it on. Without it Starlette sends the body
+    chunked, the browser cannot compute a duration, and the player renders as
+    `0:00` with a dead scrub bar — observed on the first real recording this
+    proxy ever served.
     """
     timeout = httpx.Timeout(FETCH_TIMEOUT_SECONDS)
     try:
@@ -78,6 +84,8 @@ async def stream_recording(url: str):
                 declared = response.headers.get("content-length")
                 if declared and int(declared) > MAX_RECORDING_BYTES:
                     raise RecordingUnavailable("the recording is larger than we will proxy")
+                if meta is not None and declared:
+                    meta["content-length"] = declared
 
                 sent = 0
                 async for chunk in response.aiter_bytes(CHUNK_BYTES):
